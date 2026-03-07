@@ -122,7 +122,9 @@ export default class ESMImportTransformer extends Transformer {
       if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
       if (!hasFrom && typeNames.length > 0) {
         for (const name of typeNames) {
-          this.tokens.appendCode(`export const ${name} = undefined;`);
+          if (!this.declarationInfo.valueDeclarations.has(name)) {
+            this.tokens.appendCode(`export const ${name} = undefined;`);
+          }
         }
       }
     } else if (typeName) {
@@ -134,11 +136,11 @@ export default class ESMImportTransformer extends Transformer {
       this.tokens.removeToken(); // Foo
       let depth = 0;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.parenL) ||
-            this.tokens.matches1(tt.lessThan) || this.tokens.matches1(tt.bracketL)) {
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL) ||
+            this.tokens.matches1(tt.parenL) || this.tokens.matches1(tt.bracketL)) {
           depth++;
         } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
-                   this.tokens.matches1(tt.greaterThan) || this.tokens.matches1(tt.bracketR)) {
+                   this.tokens.matches1(tt.bracketR)) {
           depth--;
         } else if (depth === 0 && this.tokens.matches1(tt.semi)) {
           this.tokens.removeToken();
@@ -146,7 +148,9 @@ export default class ESMImportTransformer extends Transformer {
         }
         this.tokens.removeToken();
       }
-      this.tokens.appendCode(`export const ${typeName} = undefined;`);
+      if (!this.declarationInfo.valueDeclarations.has(typeName)) {
+        this.tokens.appendCode(`export const ${typeName} = undefined;`);
+      }
     } else {
       // `export [declare] type * [as Foo] from '...'` or unrecognized - erase
       this.tokens.removeInitialToken(); // export
@@ -154,7 +158,7 @@ export default class ESMImportTransformer extends Transformer {
       this.tokens.removeToken(); // type
       let depth = 0;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL)) depth++;
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL)) depth++;
         else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
         else if (depth === 0 && this.tokens.matches1(tt.semi)) {
           this.tokens.removeToken();
@@ -369,7 +373,8 @@ export default class ESMImportTransformer extends Transformer {
       this.isTypeScriptTransformEnabled &&
       !this.keepUnusedImports &&
       this.declarationInfo.typeDeclarations.has(name) &&
-      !this.declarationInfo.valueDeclarations.has(name)
+      !this.declarationInfo.valueDeclarations.has(name) &&
+      !this.declarationInfo.exportedTypeNames.has(name)
     );
   }
 }

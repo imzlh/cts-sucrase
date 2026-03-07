@@ -33,6 +33,7 @@ export default function shouldElideDefaultExport(
   const exportedName = tokens.identifierNameForToken(identifierToken);
   return (
     declarationInfo.typeDeclarations.has(exportedName) &&
-    !declarationInfo.valueDeclarations.has(exportedName)
+    !declarationInfo.valueDeclarations.has(exportedName) &&
+    !declarationInfo.exportedTypeNames.has(exportedName)
   );
 }

@@ -2,6 +2,7 @@ import type {Token} from "../parser/tokenizer";
 import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
+import getDeclarationInfo, {type DeclarationInfo} from "../util/getDeclarationInfo";
 import getImportExportSpecifierInfo from "../util/getImportExportSpecifierInfo";
 import isIdentifier from "../util/isIdentifier";
 import {removeMaybeImportAttributes} from "../util/removeMaybeImportAttributes";
@@ -9,12 +10,22 @@ import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
 
 export default class TypeScriptTransformer extends Transformer {
+  private declarationInfo: DeclarationInfo;
+
   constructor(
     readonly rootTransformer: RootTransformer,
     readonly tokens: TokenProcessor,
     readonly isImportsTransformEnabled: boolean,
   ) {
     super();
+    this.declarationInfo = getDeclarationInfo(tokens);
+  }
+
+  /** Only emit a placeholder if no runtime value with this name already exists. */
+  private appendPlaceholder(name: string): void {
+    if (!this.declarationInfo.valueDeclarations.has(name)) {
+      this.tokens.appendCode(`export const ${name} = undefined;`);
+    }
   }
 
   process(): boolean {
@@ -133,7 +144,7 @@ export default class TypeScriptTransformer extends Transformer {
       }
     }
     // Emit placeholder so the name is a real export binding at runtime
-    this.tokens.appendCode(`export const ${interfaceName} = undefined;`);
+    this.appendPlaceholder(interfaceName);
     return true;
   }
 
@@ -180,7 +191,7 @@ export default class TypeScriptTransformer extends Transformer {
       if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
       if (!hasFrom && typeNames.length > 0) {
         for (const name of typeNames) {
-          this.tokens.appendCode(`export const ${name} = undefined;`);
+          this.appendPlaceholder(name);
         }
       }
     } else if (typeName) {
@@ -194,11 +205,15 @@ export default class TypeScriptTransformer extends Transformer {
       // tracking brace/bracket/paren depth so inner `;` are not mistaken for the end.
       let depth = 0;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.parenL) ||
-            this.tokens.matches1(tt.lessThan) || this.tokens.matches1(tt.bracketL)) {
+        // Track all bracket-like pairs that can contain semicolons.
+        // `<>` for generics is intentionally excluded: no bare `;` inside `<>` in types
+        // that isn't already wrapped in `{}`. dollarBraceL (${ in template literal types)
+        // must be tracked because its closing `}` is tt.braceR.
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL) ||
+            this.tokens.matches1(tt.parenL) || this.tokens.matches1(tt.bracketL)) {
           depth++;
         } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
-                   this.tokens.matches1(tt.greaterThan) || this.tokens.matches1(tt.bracketR)) {
+                   this.tokens.matches1(tt.bracketR)) {
           depth--;
         } else if (depth === 0 && this.tokens.matches1(tt.semi)) {
           this.tokens.removeToken();
@@ -206,7 +221,7 @@ export default class TypeScriptTransformer extends Transformer {
         }
         this.tokens.removeToken();
       }
-      this.tokens.appendCode(`export const ${typeName} = undefined;`);
+      this.appendPlaceholder(typeName);
     } else {
       // `export [declare] type * [as Foo] from '...'` or other unrecognized form - just erase
       this.tokens.removeInitialToken(); // export
@@ -214,7 +229,7 @@ export default class TypeScriptTransformer extends Transformer {
       this.tokens.removeToken(); // type
       let depth = 0;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL)) depth++;
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL)) depth++;
         else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
         else if (depth === 0 && this.tokens.matches1(tt.semi)) {
           this.tokens.removeToken();
