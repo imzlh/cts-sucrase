@@ -83,26 +83,35 @@ export default class ESMImportTransformer extends Transformer {
       return true;
     }
     const isBraceL = thirdToken.type === tt.braceL;
-    const typeName = isBraceL ? null : this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
-    
+    // Only extract typeName when the third token is an actual identifier (not `*`, `=`, etc.)
+    const typeName = (!isBraceL && thirdToken.type === tt.name)
+      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2)
+      : null;
+
     if (isBraceL) {
       const typeNames: string[] = [];
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      this.tokens.removeToken();
+      this.tokens.removeInitialToken(); // export
+      this.tokens.removeToken();        // type
+      this.tokens.removeToken();        // {
       while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
-        if (this.tokens.matches1(tt.name)) {
-          typeNames.push(this.tokens.identifierName());
+        const specifierInfo = getImportExportSpecifierInfo(this.tokens);
+        if (!specifierInfo.isType && specifierInfo.rightName) {
+          typeNames.push(specifierInfo.rightName);
         }
-        this.tokens.removeToken();
+        while (this.tokens.currentIndex() < specifierInfo.endIndex) {
+          this.tokens.removeToken();
+        }
+        if (this.tokens.matches1(tt.comma)) {
+          this.tokens.removeToken();
+        }
       }
       if (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken();
+        this.tokens.removeToken(); // }
       }
       const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
       if (hasFrom) {
-        this.tokens.removeToken();
-        this.tokens.removeToken();
+        this.tokens.removeToken(); // from
+        this.tokens.removeToken(); // 'module'
       }
       if (this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();

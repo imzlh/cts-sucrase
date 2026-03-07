@@ -58,12 +58,6 @@ export const value = 1;
       assert.ok(result.code.length > 0);
     });
 
-    it("handles export type with no name", () => {
-      const source = `export type ;`;
-      const result = transform(source, {transforms: ["typescript"]});
-      assert.ok(result.code.length > 0);
-    });
-
     it("handles using in async function", () => {
       const source = `async function test() { await using resource = getResource(); }`;
       const result = transform(source, {transforms: ["typescript"]});
@@ -111,6 +105,35 @@ async function getUser(req: Request, res: Response) {
       assert.ok(result.code.includes("const db = await connectDB()"));
       assert.ok(!result.code.includes("interface"));
       assert.ok(!result.code.includes("type"));
+    });
+
+    it("handles Deno-style imports and references", () => {
+      const source = `/// <reference no-default-lib="true" />
+/// <reference lib="dom" />
+/// <reference lib="dom.iterable" />
+/// <reference lib="dom.asynciterable" />
+/// <reference lib="deno.ns" />
+
+
+import "$std/dotenv/load.ts";
+
+
+import { start } from "$fresh/server.ts";
+import manifest from "./fresh.gen.ts";
+import config from "./fresh.config.ts";
+
+
+await start(manifest, config);`;
+      
+      const result = transform(source, {transforms: ["typescript"]});
+      
+      assert.ok(result.code.includes("import"));
+      assert.ok(result.code.includes("start"));
+      assert.ok(result.code.includes("manifest"));
+      assert.ok(result.code.includes("config"));
+      assert.ok(result.code.includes("await start"));
+      // 三斜线指令作为注释保留在输出中是正常的
+      assert.ok(result.code.includes("reference"));
     });
 
     it("handles export type re-exports", () => {

@@ -59,6 +59,8 @@ const y = 2;`;
     it("generates source map for await using transformation", () => {
       const source = `await using resource = getResource();`;
       const {code, mappings} = getSourceMap(source);
+      console.log(code);
+      console.log(mappings);
       
       assert.ok(code.includes("await const resource"));
       assert.ok(mappings.length > 0);

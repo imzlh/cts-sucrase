@@ -2,6 +2,7 @@ import type {Token} from "../parser/tokenizer";
 import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
+import getImportExportSpecifierInfo from "../util/getImportExportSpecifierInfo";
 import isIdentifier from "../util/isIdentifier";
 import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
@@ -89,7 +90,8 @@ export default class TypeScriptTransformer extends Transformer {
 
   processExportInterface(): boolean {
     const thirdToken = this.tokens.tokenAtRelativeIndex(2);
-    if (!thirdToken) {
+    if (!thirdToken || thirdToken.type !== tt.name) {
+      // No valid interface name - remove the whole declaration
       this.tokens.removeInitialToken();
       while (!this.tokens.isAtEnd()) {
         this.tokens.removeToken();
@@ -132,26 +134,36 @@ export default class TypeScriptTransformer extends Transformer {
       return true;
     }
     const isBraceL = thirdToken.type === tt.braceL;
-    const typeName = isBraceL ? null : this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
-    
+    // Only extract typeName when the third token is an actual identifier (not `*`, `=`, etc.)
+    const typeName = (!isBraceL && thirdToken.type === tt.name)
+      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2)
+      : null;
+
     if (isBraceL) {
       const typeNames: string[] = [];
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      this.tokens.removeToken();
+      this.tokens.removeInitialToken(); // export
+      this.tokens.removeToken();        // type
+      this.tokens.removeToken();        // {
       while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
-        if (this.tokens.matches1(tt.name)) {
-          typeNames.push(this.tokens.identifierName());
+        const specifierInfo = getImportExportSpecifierInfo(this.tokens);
+        // Only collect the exported (right-side) name; skip `type X` specifiers
+        if (!specifierInfo.isType && specifierInfo.rightName) {
+          typeNames.push(specifierInfo.rightName);
         }
-        this.tokens.removeToken();
+        while (this.tokens.currentIndex() < specifierInfo.endIndex) {
+          this.tokens.removeToken();
+        }
+        if (this.tokens.matches1(tt.comma)) {
+          this.tokens.removeToken();
+        }
       }
       if (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken();
+        this.tokens.removeToken(); // }
       }
       const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
       if (hasFrom) {
-        this.tokens.removeToken();
-        this.tokens.removeToken();
+        this.tokens.removeToken(); // from
+        this.tokens.removeToken(); // 'module'
       }
       if (this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();

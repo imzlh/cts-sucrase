@@ -15,7 +15,7 @@ export interface TokenProcessorResult {
 
 export default class TokenProcessor {
   private resultCode: string = "";
-  private resultMappings: Array<number | undefined> = new Array(this.tokens.length);
+  private resultMappings: Array<number | undefined>;
   private tokenIndex = 0;
 
   constructor(
@@ -23,7 +23,11 @@ export default class TokenProcessor {
     readonly tokens: Array<Token>,
     readonly isFlowEnabled: boolean,
     readonly helperManager: HelperManager,
-  ) {}
+  ) {
+    // Must initialize here (not as field initializer) because field initializers
+    // run before parameter properties are assigned, so this.tokens would be undefined.
+    this.resultMappings = new Array(this.tokens.length);
+  }
 
   snapshot(): TokenProcessorSnapshot {
     return {
