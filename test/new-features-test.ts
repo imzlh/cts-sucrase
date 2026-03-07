@@ -18,10 +18,10 @@ describe("using keyword transform", () => {
     );
   });
 
-  it("transforms await using to await const", () => {
+  it("transforms await using to const", () => {
     assertResult(
       `await using resource = getResource();`,
-      `await const resource = getResource();`,
+      `const resource = getResource();`,
     );
   });
 

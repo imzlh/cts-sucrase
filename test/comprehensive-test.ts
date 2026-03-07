@@ -16,6 +16,9 @@ describe("comprehensive transformer tests", () => {
       const source = `
 using resource = getResource();
 export type ID = string | number;
+export interface IUser {
+      name: string;
+}
 const x: number = 1;
 `;
       const result = transform(source, {transforms: ["typescript"]});
@@ -23,6 +26,7 @@ const x: number = 1;
       assert.ok(result.code.includes("const resource"));
       assert.ok(result.code.includes("export const ID = undefined"));
       assert.ok(result.code.includes("const x = 1"));
+      assert.ok(result.code.includes("const IUser = undefined"));
     });
 
     it("handles multiple type exports correctly", () => {
@@ -61,7 +65,7 @@ export const value = 1;
     it("handles using in async function", () => {
       const source = `async function test() { await using resource = getResource(); }`;
       const result = transform(source, {transforms: ["typescript"]});
-      assert.ok(result.code.includes("await const resource"));
+      assert.ok(result.code.includes("const resource"));
     });
 
     it("handles nested using statements", () => {

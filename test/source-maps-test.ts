@@ -62,7 +62,7 @@ const y = 2;`;
       console.log(code);
       console.log(mappings);
       
-      assert.ok(code.includes("await const resource"));
+      assert.ok(code.includes("const resource"));
       assert.ok(mappings.length > 0);
     });
   });

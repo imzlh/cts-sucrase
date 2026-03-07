@@ -1,5 +1,6 @@
 import {isTopLevelDeclaration} from "../parser/tokenizer";
 import {TokenType as tt} from "../parser/tokenizer/types";
+import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import type TokenProcessor from "../TokenProcessor";
 
 export interface DeclarationInfo {
@@ -27,17 +28,25 @@ export default function getDeclarationInfo(tokens: TokenProcessor): DeclarationI
   for (let i = 0; i < tokens.tokens.length; i++) {
     const token = tokens.tokens[i];
     if (token.type === tt.name && isTopLevelDeclaration(token)) {
-      if (token.isType) {
-        typeDeclarations.add(tokens.identifierNameForToken(token));
-        // `export interface Foo` or `export type Foo = ...`:
-        // token at i-2 is `export`, token at i-1 is `interface`/`type`.
-        // The transformer emits `export const Foo = undefined` for these,
-        // so also add to valueDeclarations to prevent `export { Foo }` elision.
-        if (i >= 2 && tokens.tokens[i - 2].type === tt._export) {
-          valueDeclarations.add(tokens.identifierNameForToken(token));
+      const identifierName = tokens.identifierNameForToken(token);
+      
+      // Check for export interface or export type
+      if (i >= 2 && tokens.tokens[i - 2].type === tt._export) {
+        const prevToken = tokens.tokens[i - 1];
+        if (prevToken.type === tt.name && 
+            (prevToken.contextualKeyword === ContextualKeyword._interface || 
+             prevToken.contextualKeyword === ContextualKeyword._type)) {
+          // For export interface and export type, add to both sets
+          typeDeclarations.add(identifierName);
+          valueDeclarations.add(identifierName);
+          continue;
         }
+      }
+      
+      if (token.isType) {
+        typeDeclarations.add(identifierName);
       } else {
-        valueDeclarations.add(tokens.identifierNameForToken(token));
+        valueDeclarations.add(identifierName);
       }
     }
   }
