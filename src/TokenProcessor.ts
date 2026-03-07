@@ -2,7 +2,6 @@ import type {HelperManager} from "./HelperManager";
 import type {Token} from "./parser/tokenizer";
 import type {ContextualKeyword} from "./parser/tokenizer/keywords";
 import {type TokenType, TokenType as tt} from "./parser/tokenizer/types";
-import isAsyncOperation from "./util/isAsyncOperation";
 
 export interface TokenProcessorSnapshot {
   resultCode: string;
@@ -16,8 +15,6 @@ export interface TokenProcessorResult {
 
 export default class TokenProcessor {
   private resultCode: string = "";
-  // Array mapping input token index to optional string index position in the
-  // output code.
   private resultMappings: Array<number | undefined> = new Array(this.tokens.length);
   private tokenIndex = 0;
 
@@ -25,17 +22,9 @@ export default class TokenProcessor {
     readonly code: string,
     readonly tokens: Array<Token>,
     readonly isFlowEnabled: boolean,
-    readonly disableESTransforms: boolean,
     readonly helperManager: HelperManager,
   ) {}
 
-  /**
-   * Snapshot the token state in a way that can be restored later, useful for
-   * things like lookahead.
-   *
-   * resultMappings do not need to be copied since in all use cases, they will
-   * be overwritten anyway after restore.
-   */
   snapshot(): TokenProcessorSnapshot {
     return {
       resultCode: this.resultCode,
@@ -48,13 +37,6 @@ export default class TokenProcessor {
     this.tokenIndex = snapshot.tokenIndex;
   }
 
-  /**
-   * Remove and return the code generated since the snapshot, leaving the
-   * current token position in-place. Unlike most TokenProcessor operations,
-   * this operation can result in input/output line number mismatches because
-   * the removed code may contain newlines, so this operation should be used
-   * sparingly.
-   */
   dangerouslyGetAndRemoveCodeSinceSnapshot(snapshot: TokenProcessorSnapshot): string {
     const result = this.resultCode.slice(snapshot.resultCode.length);
     this.resultCode = snapshot.resultCode;
@@ -75,8 +57,6 @@ export default class TokenProcessor {
   }
 
   identifierNameAtIndex(index: number): string {
-    // TODO: We need to process escapes since technically you can have unicode escapes in variable
-    // names.
     return this.identifierNameForToken(this.tokens[index]);
   }
 
@@ -105,9 +85,6 @@ export default class TokenProcessor {
   }
 
   stringValueForToken(token: Token): string {
-    // This is used to identify when two imports are the same and to resolve TypeScript enum keys.
-    // Ideally we'd process escapes within the strings, but for now we pretty much take the raw
-    // code.
     return this.code.slice(token.start + 1, token.end - 1);
   }
 
@@ -183,19 +160,15 @@ export default class TokenProcessor {
 
   replaceToken(newCode: string): void {
     this.resultCode += this.previousWhitespaceAndComments();
-    this.appendTokenPrefix();
     this.resultMappings[this.tokenIndex] = this.resultCode.length;
     this.resultCode += newCode;
-    this.appendTokenSuffix();
     this.tokenIndex++;
   }
 
   replaceTokenTrimmingLeftWhitespace(newCode: string): void {
     this.resultCode += this.previousWhitespaceAndComments().replace(/[^\r\n]/g, "");
-    this.appendTokenPrefix();
     this.resultMappings[this.tokenIndex] = this.resultCode.length;
     this.resultCode += newCode;
-    this.appendTokenSuffix();
     this.tokenIndex++;
   }
 
@@ -207,9 +180,6 @@ export default class TokenProcessor {
     this.replaceTokenTrimmingLeftWhitespace("");
   }
 
-  /**
-   * Remove all code until the next }, accounting for balanced braces.
-   */
   removeBalancedCode(): void {
     let braceDepth = 0;
     while (!this.isAtEnd()) {
@@ -234,77 +204,23 @@ export default class TokenProcessor {
 
   copyToken(): void {
     this.resultCode += this.previousWhitespaceAndComments();
-    this.appendTokenPrefix();
     this.resultMappings[this.tokenIndex] = this.resultCode.length;
     this.resultCode += this.code.slice(
       this.tokens[this.tokenIndex].start,
       this.tokens[this.tokenIndex].end,
     );
-    this.appendTokenSuffix();
     this.tokenIndex++;
   }
 
   copyTokenWithPrefix(prefix: string): void {
     this.resultCode += this.previousWhitespaceAndComments();
-    this.appendTokenPrefix();
     this.resultCode += prefix;
     this.resultMappings[this.tokenIndex] = this.resultCode.length;
     this.resultCode += this.code.slice(
       this.tokens[this.tokenIndex].start,
       this.tokens[this.tokenIndex].end,
     );
-    this.appendTokenSuffix();
     this.tokenIndex++;
-  }
-
-  private appendTokenPrefix(): void {
-    const token = this.currentToken();
-    if (token.numNullishCoalesceStarts || token.isOptionalChainStart) {
-      token.isAsyncOperation = isAsyncOperation(this);
-    }
-    if (this.disableESTransforms) {
-      return;
-    }
-    if (token.numNullishCoalesceStarts) {
-      for (let i = 0; i < token.numNullishCoalesceStarts; i++) {
-        if (token.isAsyncOperation) {
-          this.resultCode += "await ";
-          this.resultCode += this.helperManager.getHelperName("asyncNullishCoalesce");
-        } else {
-          this.resultCode += this.helperManager.getHelperName("nullishCoalesce");
-        }
-        this.resultCode += "(";
-      }
-    }
-    if (token.isOptionalChainStart) {
-      if (token.isAsyncOperation) {
-        this.resultCode += "await ";
-      }
-      if (this.tokenIndex > 0 && this.tokenAtRelativeIndex(-1).type === tt._delete) {
-        if (token.isAsyncOperation) {
-          this.resultCode += this.helperManager.getHelperName("asyncOptionalChainDelete");
-        } else {
-          this.resultCode += this.helperManager.getHelperName("optionalChainDelete");
-        }
-      } else if (token.isAsyncOperation) {
-        this.resultCode += this.helperManager.getHelperName("asyncOptionalChain");
-      } else {
-        this.resultCode += this.helperManager.getHelperName("optionalChain");
-      }
-      this.resultCode += "([";
-    }
-  }
-
-  private appendTokenSuffix(): void {
-    const token = this.currentToken();
-    if (token.isOptionalChainEnd && !this.disableESTransforms) {
-      this.resultCode += "])";
-    }
-    if (token.numNullishCoalesceEnds && !this.disableESTransforms) {
-      for (let i = 0; i < token.numNullishCoalesceEnds; i++) {
-        this.resultCode += "))";
-      }
-    }
   }
 
   appendCode(code: string): void {
@@ -328,10 +244,6 @@ export default class TokenProcessor {
     return this.tokenIndex;
   }
 
-  /**
-   * Move to the next token. Only suitable in preprocessing steps. When
-   * generating new code, you should use copyToken or removeToken.
-   */
   nextToken(): void {
     if (this.tokenIndex === this.tokens.length) {
       throw new Error("Unexpectedly reached end of input.");

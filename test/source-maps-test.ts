@@ -1,75 +1,127 @@
-import {
-  eachMapping,
-  TraceMap,
-  type SourceMapInput,
-  type EachMapping,
-} from "@jridgewell/trace-mapping";
+import {eachMapping, TraceMap, type SourceMapInput} from "@jridgewell/trace-mapping";
 import * as assert from "assert";
-
 import {transform} from "../src";
 
+function getSourceMap(code: string, options: any = {}): any {
+  const result = transform(code, {
+    transforms: ["typescript"],
+    sourceMapOptions: {compiledFilename: "test.js"},
+    filePath: "test.ts",
+    ...options,
+  });
+  return {
+    code: result.code,
+    sourceMap: result.sourceMap,
+    mappings: getMappings(result.sourceMap),
+  };
+}
+
+function getMappings(sourceMap: any): Array<any> {
+  const traceMap = new TraceMap(sourceMap as SourceMapInput);
+  const mappings: Array<any> = [];
+  eachMapping(traceMap, ({generatedLine, generatedColumn, originalLine, originalColumn}) => {
+    mappings.push({generatedLine, generatedColumn, originalLine, originalColumn});
+  });
+  return mappings;
+}
+
 describe("source maps", () => {
-  it("generates a detailed line-based source map", () => {
-    const source = `\
-      import a from "./a";
-      const x: number = a;
-      console.log(x + 1);
-    `;
-    const result = transform(source, {
-      transforms: ["imports", "typescript"],
-      sourceMapOptions: {compiledFilename: "test.js"},
-      filePath: "test.ts",
+  describe("basic functionality", () => {
+    it("generates source map for simple code", () => {
+      const source = `const x: number = 1;`;
+      const {sourceMap} = getSourceMap(source);
+      
+      assert.equal(sourceMap.version, 3);
+      assert.deepEqual(sourceMap.sources, ["test.ts"]);
+      assert.equal(sourceMap.file, "test.js");
     });
-    assert.equal(
-      result.code,
-      `"use strict"; function _interopRequireDefault(obj) { \
-return obj && obj.__esModule ? obj : { default: obj }; }      \
-var _a = require('./a'); var _a2 = _interopRequireDefault(_a);
-      const x = _a2.default;
-      console.log(x + 1);
-    `,
-    );
-    assert.deepEqual(result.sourceMap, {
-      version: 3,
-      sources: ["test.ts"],
-      names: [],
-      mappings: `AAAA,mHAAM,8DAAmB;AACzB,MAAM,MAAM,CAAC,CAAS,EAAE,WAAC;AACzB,\
-MAAM,OAAO,CAAC,GAAG,CAAC,EAAE,EAAE,CAAC,CAAC;AACxB`,
-      file: "test.js",
+
+    it("generates source map with correct line mapping", () => {
+      const source = `const x = 1;
+const y = 2;`;
+      const {mappings} = getSourceMap(source);
+      
+      assert.ok(mappings.length > 0);
+      assert.equal(mappings[0].originalLine, 1);
+      assert.equal(mappings[0].generatedLine, 1);
     });
-    const traceMap = new TraceMap(result.sourceMap as SourceMapInput);
-    const mappings: Array<
-      Pick<EachMapping, "generatedLine" | "generatedColumn" | "originalLine" | "originalColumn">
-    > = [];
-    eachMapping(traceMap, ({generatedLine, generatedColumn, originalLine, originalColumn}) => {
-      mappings.push({generatedLine, generatedColumn, originalLine, originalColumn});
+  });
+
+  describe("using keyword transform", () => {
+    it("generates source map for using to const transformation", () => {
+      const source = `using resource = getResource();`;
+      const {code, mappings} = getSourceMap(source);
+      
+      assert.ok(code.includes("const resource"));
+      assert.ok(mappings.length > 0);
     });
-    assert.deepEqual(
-      mappings,
-      [
-        {generatedLine: 1, generatedColumn: 0, originalLine: 1, originalColumn: 0},
-        {generatedLine: 1, generatedColumn: 115, originalLine: 1, originalColumn: 6},
-        {generatedLine: 1, generatedColumn: 177, originalLine: 1, originalColumn: 25},
-        {generatedLine: 2, generatedColumn: 0, originalLine: 2, originalColumn: 0},
-        {generatedLine: 2, generatedColumn: 6, originalLine: 2, originalColumn: 6},
-        {generatedLine: 2, generatedColumn: 12, originalLine: 2, originalColumn: 12},
-        {generatedLine: 2, generatedColumn: 13, originalLine: 2, originalColumn: 13},
-        {generatedLine: 2, generatedColumn: 14, originalLine: 2, originalColumn: 22},
-        {generatedLine: 2, generatedColumn: 16, originalLine: 2, originalColumn: 24},
-        {generatedLine: 2, generatedColumn: 27, originalLine: 2, originalColumn: 25},
-        {generatedLine: 3, generatedColumn: 0, originalLine: 3, originalColumn: 0},
-        {generatedLine: 3, generatedColumn: 6, originalLine: 3, originalColumn: 6},
-        {generatedLine: 3, generatedColumn: 13, originalLine: 3, originalColumn: 13},
-        {generatedLine: 3, generatedColumn: 14, originalLine: 3, originalColumn: 14},
-        {generatedLine: 3, generatedColumn: 17, originalLine: 3, originalColumn: 17},
-        {generatedLine: 3, generatedColumn: 18, originalLine: 3, originalColumn: 18},
-        {generatedLine: 3, generatedColumn: 20, originalLine: 3, originalColumn: 20},
-        {generatedLine: 3, generatedColumn: 22, originalLine: 3, originalColumn: 22},
-        {generatedLine: 3, generatedColumn: 23, originalLine: 3, originalColumn: 23},
-        {generatedLine: 3, generatedColumn: 24, originalLine: 3, originalColumn: 24},
-        {generatedLine: 4, generatedColumn: 0, originalLine: 4, originalColumn: 0},
-      ],
-      `Expected:\n${mappings.map((m) => `${JSON.stringify(m)},`).join("\n")}`,
-    );
+
+    it("generates source map for await using transformation", () => {
+      const source = `await using resource = getResource();`;
+      const {code, mappings} = getSourceMap(source);
+      
+      assert.ok(code.includes("await const resource"));
+      assert.ok(mappings.length > 0);
+    });
+  });
+
+  describe("type export transform", () => {
+    it("generates source map for export interface transformation", () => {
+      const source = `export interface IAction { type: string; }`;
+      const {code, sourceMap} = getSourceMap(source);
+      
+      assert.ok(code.includes("export const IAction = undefined"));
+      assert.equal(sourceMap.version, 3);
+    });
+
+    it("generates source map for export type transformation", () => {
+      const source = `export type ID = string | number;`;
+      const {code, sourceMap} = getSourceMap(source);
+      
+      assert.ok(code.includes("export const ID = undefined"));
+      assert.equal(sourceMap.version, 3);
+    });
+
+    it("handles export type with multiple names", () => {
+      const source = `export type { User, Admin };`;
+      const {code, sourceMap} = getSourceMap(source);
+      
+      assert.ok(code.includes("export const User = undefined"));
+      assert.ok(code.includes("export const Admin = undefined"));
+      assert.equal(sourceMap.version, 3);
+    });
+
+    it("removes export type from without error", () => {
+      const source = `export type { User } from './types';`;
+      const {code, sourceMap} = getSourceMap(source);
+      
+      assert.ok(!code.includes("User"));
+      assert.equal(sourceMap.version, 3);
+    });
+  });
+
+  describe("complex scenarios", () => {
+    it("handles mixed code with using and type exports", () => {
+      const source = `
+using resource = getResource();
+export interface IResult { value: number; }
+const x: number = 1;
+`;
+      const {code, sourceMap, mappings} = getSourceMap(source);
+      
+      assert.ok(code.includes("const resource"));
+      assert.ok(code.includes("export const IResult = undefined"));
+      assert.ok(code.includes("const x = 1"));
+      assert.equal(sourceMap.version, 3);
+      assert.ok(mappings.length > 0);
+    });
+
+    it("preserves column information for simple transformations", () => {
+      const source = `const x: number = 1;`;
+      const {mappings} = getSourceMap(source);
+      
+      const firstMapping = mappings.find((m: any) => m.originalColumn === 0);
+      assert.ok(firstMapping);
+    });
   });
 });

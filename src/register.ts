@@ -35,41 +35,19 @@ export function addHook(
 }
 
 export function registerJS(hookOptions?: HookOptions): RevertFunction {
-  return addHook(".js", {transforms: ["imports", "flow", "jsx"]}, hookOptions);
+  return addHook(".js", {transforms: ["flow", "jsx"]}, hookOptions);
 }
 
 export function registerJSX(hookOptions?: HookOptions): RevertFunction {
-  return addHook(".jsx", {transforms: ["imports", "flow", "jsx"]}, hookOptions);
+  return addHook(".jsx", {transforms: ["flow", "jsx"]}, hookOptions);
 }
 
 export function registerTS(hookOptions?: HookOptions): RevertFunction {
-  return addHook(".ts", {transforms: ["imports", "typescript"]}, hookOptions);
+  return addHook(".ts", {transforms: ["typescript"]}, hookOptions);
 }
 
 export function registerTSX(hookOptions?: HookOptions): RevertFunction {
-  return addHook(".tsx", {transforms: ["imports", "typescript", "jsx"]}, hookOptions);
-}
-
-export function registerTSLegacyModuleInterop(hookOptions?: HookOptions): RevertFunction {
-  return addHook(
-    ".ts",
-    {
-      transforms: ["imports", "typescript"],
-      enableLegacyTypeScriptModuleInterop: true,
-    },
-    hookOptions,
-  );
-}
-
-export function registerTSXLegacyModuleInterop(hookOptions?: HookOptions): RevertFunction {
-  return addHook(
-    ".tsx",
-    {
-      transforms: ["imports", "typescript", "jsx"],
-      enableLegacyTypeScriptModuleInterop: true,
-    },
-    hookOptions,
-  );
+  return addHook(".tsx", {transforms: ["typescript", "jsx"]}, hookOptions);
 }
 
 export function registerAll(hookOptions?: HookOptions): RevertFunction {

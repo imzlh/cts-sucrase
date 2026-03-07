@@ -276,7 +276,7 @@ index 73c1f7db2e..59c35bfcf9 100644
 -            envName: "standalone",
 -          },
 +          loader: "@sucrase/webpack-loader",
-+          options: {transforms: ["imports", "flow"]},
++          options: {transforms: ["flow"]},
          },
        ],
      },

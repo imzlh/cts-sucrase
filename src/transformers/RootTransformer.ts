@@ -5,23 +5,16 @@ import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
 import getClassInfo, {type ClassInfo} from "../util/getClassInfo";
-import CJSImportTransformer from "./CJSImportTransformer";
 import ESMImportTransformer from "./ESMImportTransformer";
 import FlowTransformer from "./FlowTransformer";
-import JestHoistTransformer from "./JestHoistTransformer";
 import JSXTransformer from "./JSXTransformer";
-import NumericSeparatorTransformer from "./NumericSeparatorTransformer";
-import OptionalCatchBindingTransformer from "./OptionalCatchBindingTransformer";
-import OptionalChainingNullishTransformer from "./OptionalChainingNullishTransformer";
 import ReactDisplayNameTransformer from "./ReactDisplayNameTransformer";
-import ReactHotLoaderTransformer from "./ReactHotLoaderTransformer";
 import type Transformer from "./Transformer";
 import TypeScriptTransformer from "./TypeScriptTransformer";
+import UsingTransformer from "./UsingTransformer";
 
 export interface RootTransformerResult {
   code: string;
-  // Array mapping input token index to optional string index position in the
-  // output code.
   mappings: Array<number | undefined>;
 }
 
@@ -30,104 +23,51 @@ export default class RootTransformer {
   private nameManager: NameManager;
   private tokens: TokenProcessor;
   private generatedVariables: Array<string> = [];
-  private isImportsTransformEnabled: boolean;
-  private isReactHotLoaderTransformEnabled: boolean;
-  private disableESTransforms: boolean;
   private helperManager: HelperManager;
 
   constructor(
     sucraseContext: SucraseContext,
     transforms: Array<Transform>,
-    enableLegacyBabel5ModuleInterop: boolean,
     options: Options,
   ) {
     this.nameManager = sucraseContext.nameManager;
     this.helperManager = sucraseContext.helperManager;
-    const {tokenProcessor, importProcessor} = sucraseContext;
-    this.tokens = tokenProcessor;
-    this.isImportsTransformEnabled = transforms.includes("imports");
-    this.isReactHotLoaderTransformEnabled = transforms.includes("react-hot-loader");
-    this.disableESTransforms = Boolean(options.disableESTransforms);
+    this.tokens = sucraseContext.tokenProcessor;
 
-    if (!options.disableESTransforms) {
-      this.transformers.push(
-        new OptionalChainingNullishTransformer(tokenProcessor, this.nameManager),
-      );
-      this.transformers.push(new NumericSeparatorTransformer(tokenProcessor));
-      this.transformers.push(new OptionalCatchBindingTransformer(tokenProcessor, this.nameManager));
-    }
+    this.transformers.push(new UsingTransformer(this.tokens, this.nameManager));
 
     if (transforms.includes("jsx")) {
       if (options.jsxRuntime !== "preserve") {
         this.transformers.push(
-          new JSXTransformer(this, tokenProcessor, importProcessor, this.nameManager, options),
+          new JSXTransformer(this, this.tokens, null, this.nameManager, options),
         );
       }
       this.transformers.push(
-        new ReactDisplayNameTransformer(this, tokenProcessor, importProcessor, options),
+        new ReactDisplayNameTransformer(this, this.tokens, null, options),
       );
     }
 
-    let reactHotLoaderTransformer = null;
-    if (transforms.includes("react-hot-loader")) {
-      if (!options.filePath) {
-        throw new Error("filePath is required when using the react-hot-loader transform.");
-      }
-      reactHotLoaderTransformer = new ReactHotLoaderTransformer(tokenProcessor, options.filePath);
-      this.transformers.push(reactHotLoaderTransformer);
-    }
-
-    // Note that we always want to enable the imports transformer, even when the import transform
-    // itself isn't enabled, since we need to do type-only import pruning for both Flow and
-    // TypeScript.
-    if (transforms.includes("imports")) {
-      if (importProcessor === null) {
-        throw new Error("Expected non-null importProcessor with imports transform enabled.");
-      }
-      this.transformers.push(
-        new CJSImportTransformer(
-          this,
-          tokenProcessor,
-          importProcessor,
-          this.nameManager,
-          this.helperManager,
-          reactHotLoaderTransformer,
-          enableLegacyBabel5ModuleInterop,
-          Boolean(options.enableLegacyTypeScriptModuleInterop),
-          transforms.includes("typescript"),
-          transforms.includes("flow"),
-          Boolean(options.preserveDynamicImport),
-          Boolean(options.keepUnusedImports),
-        ),
-      );
-    } else {
-      this.transformers.push(
-        new ESMImportTransformer(
-          tokenProcessor,
-          this.nameManager,
-          this.helperManager,
-          reactHotLoaderTransformer,
-          transforms.includes("typescript"),
-          transforms.includes("flow"),
-          Boolean(options.keepUnusedImports),
-          options,
-        ),
-      );
-    }
+    this.transformers.push(
+      new ESMImportTransformer(
+        this.tokens,
+        this.nameManager,
+        this.helperManager,
+        null,
+        transforms.includes("typescript"),
+        transforms.includes("flow"),
+        Boolean(options.keepUnusedImports),
+        options,
+      ),
+    );
 
     if (transforms.includes("flow")) {
       this.transformers.push(
-        new FlowTransformer(this, tokenProcessor, transforms.includes("imports")),
+        new FlowTransformer(this, this.tokens, false),
       );
     }
     if (transforms.includes("typescript")) {
       this.transformers.push(
-        new TypeScriptTransformer(this, tokenProcessor, transforms.includes("imports")),
-      );
-    }
-    if (transforms.includes("jest")) {
-      this.transformers.push(
-        new JestHoistTransformer(this, tokenProcessor, this.nameManager, importProcessor),
+        new TypeScriptTransformer(this, this.tokens, false),
       );
     }
   }
@@ -135,9 +75,7 @@ export default class RootTransformer {
   transform(): RootTransformerResult {
     this.tokens.reset();
     this.processBalancedCode();
-    const shouldAddUseStrict = this.isImportsTransformEnabled;
-    // "use strict" always needs to be first, so override the normal transformer order.
-    let prefix = shouldAddUseStrict ? '"use strict";' : "";
+    let prefix = "";
     for (const transformer of this.transformers) {
       prefix += transformer.getPrefixCode();
     }
@@ -160,8 +98,6 @@ export default class RootTransformer {
       }
       return {
         code: code.slice(0, newlineIndex + 1) + prefix + code.slice(newlineIndex + 1) + suffix,
-        // The hashbang line has no tokens, so shifting the tokens to account
-        // for prefix can happen normally.
         mappings: this.shiftMappings(result.mappings, prefix.length),
       };
     } else {
@@ -210,9 +146,6 @@ export default class RootTransformer {
     this.tokens.copyToken();
   }
 
-  /**
-   * Skip past a class with a name and return that name.
-   */
   processNamedClass(): string {
     if (!this.tokens.matches2(tt._class, tt.name)) {
       throw new Error("Expected identifier for exported class name.");
@@ -223,10 +156,8 @@ export default class RootTransformer {
   }
 
   processClass(): void {
-    const classInfo = getClassInfo(this, this.tokens, this.nameManager, this.disableESTransforms);
+    const classInfo = getClassInfo(this, this.tokens, this.nameManager, true);
 
-    // Both static and instance initializers need a class name to use to invoke the initializer, so
-    // assign to one if necessary.
     const needsCommaExpression =
       (classInfo.headerInfo.isExpression || !classInfo.headerInfo.className) &&
       classInfo.staticInitializerNames.length + classInfo.instanceInitializerNames.length > 0;
@@ -262,10 +193,6 @@ export default class RootTransformer {
     }
   }
 
-  /**
-   * We want to just handle class fields in all contexts, since TypeScript supports them. Later,
-   * when some JS implementations support class fields, this should be made optional.
-   */
   processClassBody(classInfo: ClassInfo, className: string | null): void {
     const {
       headerInfo,
@@ -282,11 +209,6 @@ export default class RootTransformer {
       throw new Error("Expected non-null context ID on class.");
     }
     this.tokens.copyExpectedToken(tt.braceL);
-    if (this.isReactHotLoaderTransformEnabled) {
-      this.tokens.appendCode(
-        "__reactstandin__regenerateByEval(key, code) {this[key] = eval(code);}",
-      );
-    }
 
     const needsConstructorInit =
       constructorInitializerStatements.length + instanceInitializerNames.length > 0;
@@ -367,17 +289,9 @@ export default class RootTransformer {
     ].join(";");
   }
 
-  /**
-   * Normally it's ok to simply remove type tokens, but we need to be more careful when dealing with
-   * arrow function return types since they can confuse the parser. In that case, we want to move
-   * the close-paren to the same line as the arrow.
-   *
-   * See https://github.com/alangpierce/sucrase/issues/391 for more details.
-   */
   processPossibleArrowParamEnd(): boolean {
     if (this.tokens.matches2(tt.parenR, tt.colon) && this.tokens.tokenAtRelativeIndex(1).isType) {
       let nextNonTypeIndex = this.tokens.currentIndex() + 1;
-      // Look ahead to see if this is an arrow function or something else.
       while (this.tokens.tokens[nextNonTypeIndex].isType) {
         nextNonTypeIndex++;
       }
@@ -393,16 +307,6 @@ export default class RootTransformer {
     return false;
   }
 
-  /**
-   * An async arrow function might be of the form:
-   *
-   * async <
-   *   T
-   * >() => {}
-   *
-   * in which case, removing the type parameters will cause a syntax error. Detect this case and
-   * move the open-paren earlier.
-   */
   processPossibleAsyncArrowWithTypeParams(): boolean {
     if (
       !this.tokens.matchesContextual(ContextualKeyword._async) &&
@@ -416,7 +320,6 @@ export default class RootTransformer {
     }
 
     let nextNonTypeIndex = this.tokens.currentIndex() + 1;
-    // Look ahead to see if this is an arrow function or something else.
     while (this.tokens.tokens[nextNonTypeIndex].isType) {
       nextNonTypeIndex++;
     }
@@ -427,8 +330,6 @@ export default class RootTransformer {
         this.tokens.removeToken();
       }
       this.tokens.removeToken();
-      // We ate a ( token, so we need to process the tokens in between and then the ) token so that
-      // we remain balanced.
       this.processBalancedCode();
       this.processToken();
       return true;

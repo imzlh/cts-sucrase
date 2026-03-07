@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 import commander from "commander";
 import {glob} from "tinyglobby";
 import {exists, mkdir, readdir, readFile, stat, writeFile} from "mz/fs";
@@ -48,28 +47,13 @@ export default function run(): void {
       "Classic JSX transform fragment component, defaults to `React.Fragment`.",
     )
     .option("--keep-unused-imports", "Disable automatic removal of type-only imports/exports.")
-    .option("--preserve-dynamic-import", "Don't transpile dynamic import() to require.")
-    .option(
-      "--inject-create-require-for-import-require",
-      "Use `createRequire` when transpiling TS `import = require` to ESM.",
-    )
-    .option(
-      "--enable-legacy-typescript-module-interop",
-      "Use default TypeScript ESM/CJS interop strategy.",
-    )
-    .option("--enable-legacy-babel5-module-interop", "Use Babel 5 ESM/CJS interop strategy.")
     .parse(process.argv);
 
   if (commander.project) {
-    if (
-      commander.outDir ||
-      commander.transforms ||
-      commander.args[0] ||
-      commander.enableLegacyTypescriptModuleInterop
-    ) {
+    if (commander.outDir || commander.transforms || commander.args[0]) {
       console.error(
-        "If TypeScript project is specified, out directory, transforms, source " +
-          "directory, and --enable-legacy-typescript-module-interop may not be specified.",
+        "If TypeScript project is specified, out directory, transforms, and source " +
+          "directory may not be specified.",
       );
       process.exit(1);
     }
@@ -106,10 +90,6 @@ export default function run(): void {
       jsxPragma: commander.jsxPragma || "React.createElement",
       jsxFragmentPragma: commander.jsxFragmentPragma || "React.Fragment",
       keepUnusedImports: commander.keepUnusedImports,
-      preserveDynamicImport: commander.preserveDynamicImport,
-      injectCreateRequireForImportRequire: commander.injectCreateRequireForImportRequire,
-      enableLegacyTypeScriptModuleInterop: commander.enableLegacyTypescriptModuleInterop,
-      enableLegacyBabel5ModuleInterop: commander.enableLegacyBabel5ModuleInterop,
     },
   };
 
@@ -245,20 +225,10 @@ async function runGlob(options: CLIOptions): Promise<Array<FileInfo>> {
     }
   }
 
-  // TODO: read exclude
-
   return foundFiles;
 }
 
 async function updateOptionsFromProject(options: CLIOptions): Promise<void> {
-  /**
-   * Read the project information and assign the following.
-   *  - outDirPath
-   *  - transform: imports
-   *  - transform: typescript
-   *  - enableLegacyTypescriptModuleInterop: true/false.
-   */
-
   const tsConfigPath = join(options.project, "tsconfig.json");
 
   let str;
@@ -279,14 +249,6 @@ async function updateOptionsFromProject(options: CLIOptions): Promise<void> {
   const compilerOpts = json.compilerOptions;
   if (compilerOpts.outDir) {
     options.outDirPath = join(process.cwd(), options.project, compilerOpts.outDir);
-  }
-  if (compilerOpts.esModuleInterop !== true) {
-    sucraseOpts.enableLegacyTypeScriptModuleInterop = true;
-  }
-  if (compilerOpts.module === "commonjs") {
-    if (!sucraseOpts.transforms.includes("imports")) {
-      sucraseOpts.transforms.push("imports");
-    }
   }
 }
 

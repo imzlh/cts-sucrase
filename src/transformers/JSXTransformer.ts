@@ -1,4 +1,3 @@
-import type CJSImportProcessor from "../CJSImportProcessor";
 import type {Options} from "../index";
 import type NameManager from "../NameManager";
 import XHTMLEntities from "../parser/plugins/jsx/xhtml";
@@ -15,23 +14,16 @@ export default class JSXTransformer extends Transformer {
   jsxImportSource: string;
   isAutomaticRuntime: boolean;
 
-  // State for calculating the line number of each JSX tag in development.
   lastLineNumber: number = 1;
   lastIndex: number = 0;
 
-  // In development, variable name holding the name of the current file.
   filenameVarName: string | null = null;
-  // Mapping of claimed names for imports in the automatic transform, e,g.
-  // {jsx: "_jsx"}. This determines which imports to generate in the prefix.
   esmAutomaticImportNameResolutions: {[name: string]: string} = {};
-  // When automatically adding imports in CJS mode, we store the variable name
-  // holding the imported CJS module so we can require it in the prefix.
-  cjsAutomaticModuleNameResolutions: {[path: string]: string} = {};
 
   constructor(
     readonly rootTransformer: RootTransformer,
     readonly tokens: TokenProcessor,
-    readonly importProcessor: CJSImportProcessor | null,
+    readonly importProcessor: null,
     readonly nameManager: NameManager,
     readonly options: Options,
   ) {
@@ -55,26 +47,18 @@ export default class JSXTransformer extends Transformer {
       prefix += `const ${this.filenameVarName} = ${JSON.stringify(this.options.filePath || "")};`;
     }
     if (this.isAutomaticRuntime) {
-      if (this.importProcessor) {
-        // CJS mode: emit require statements for all modules that were referenced.
-        for (const [path, resolvedName] of Object.entries(this.cjsAutomaticModuleNameResolutions)) {
-          prefix += `var ${resolvedName} = require("${path}");`;
-        }
-      } else {
-        // ESM mode: consolidate and emit import statements for referenced names.
-        const {createElement: createElementResolution, ...otherResolutions} =
-          this.esmAutomaticImportNameResolutions;
-        if (createElementResolution) {
-          prefix += `import {createElement as ${createElementResolution}} from "${this.jsxImportSource}";`;
-        }
-        const importSpecifiers = Object.entries(otherResolutions)
-          .map(([name, resolvedName]) => `${name} as ${resolvedName}`)
-          .join(", ");
-        if (importSpecifiers) {
-          const importPath =
-            this.jsxImportSource + (this.options.production ? "/jsx-runtime" : "/jsx-dev-runtime");
-          prefix += `import {${importSpecifiers}} from "${importPath}";`;
-        }
+      const {createElement: createElementResolution, ...otherResolutions} =
+        this.esmAutomaticImportNameResolutions;
+      if (createElementResolution) {
+        prefix += `import {createElement as ${createElementResolution}} from "${this.jsxImportSource}";`;
+      }
+      const importSpecifiers = Object.entries(otherResolutions)
+        .map(([name, resolvedName]) => `${name} as ${resolvedName}`)
+        .join(", ");
+      if (importSpecifiers) {
+        const importPath =
+          this.jsxImportSource + (this.options.production ? "/jsx-runtime" : "/jsx-dev-runtime");
+        prefix += `import {${importSpecifiers}} from "${importPath}";`;
       }
     }
     return prefix;
@@ -249,20 +233,10 @@ export default class JSXTransformer extends Transformer {
       return this.claimAutoImportedFuncInvocation("createElement", "");
     } else {
       const {jsxPragmaInfo} = this;
-      const resolvedPragmaBaseName = this.importProcessor
-        ? this.importProcessor.getIdentifierReplacement(jsxPragmaInfo.base) || jsxPragmaInfo.base
-        : jsxPragmaInfo.base;
-      return `${resolvedPragmaBaseName}${jsxPragmaInfo.suffix}(`;
+      return `${jsxPragmaInfo.base}${jsxPragmaInfo.suffix}(`;
     }
   }
 
-  /**
-   * Return the code to use as the component when compiling a shorthand
-   * fragment, e.g. `React.Fragment`.
-   *
-   * This may be called from either the classic or automatic runtime, and
-   * the value should be auto-imported for the automatic runtime.
-   */
   getFragmentCode(): string {
     if (this.isAutomaticRuntime) {
       return this.claimAutoImportedName(
@@ -271,49 +245,22 @@ export default class JSXTransformer extends Transformer {
       );
     } else {
       const {jsxPragmaInfo} = this;
-      const resolvedFragmentPragmaBaseName = this.importProcessor
-        ? this.importProcessor.getIdentifierReplacement(jsxPragmaInfo.fragmentBase) ||
-          jsxPragmaInfo.fragmentBase
-        : jsxPragmaInfo.fragmentBase;
-      return resolvedFragmentPragmaBaseName + jsxPragmaInfo.fragmentSuffix;
+      return jsxPragmaInfo.fragmentBase + jsxPragmaInfo.fragmentSuffix;
     }
   }
 
-  /**
-   * Return code that invokes the given function.
-   *
-   * When the imports transform is enabled, use the CJSImportTransformer
-   * strategy of using `.call(void 0, ...` to avoid passing a `this` value in a
-   * situation that would otherwise look like a method call.
-   */
   claimAutoImportedFuncInvocation(funcName: string, importPathSuffix: string): string {
     const funcCode = this.claimAutoImportedName(funcName, importPathSuffix);
-    if (this.importProcessor) {
-      return `${funcCode}.call(void 0, `;
-    } else {
-      return `${funcCode}(`;
-    }
+    return `${funcCode}(`;
   }
 
   claimAutoImportedName(funcName: string, importPathSuffix: string): string {
-    if (this.importProcessor) {
-      // CJS mode: claim a name for the module and mark it for import.
-      const path = this.jsxImportSource + importPathSuffix;
-      if (!this.cjsAutomaticModuleNameResolutions[path]) {
-        this.cjsAutomaticModuleNameResolutions[path] =
-          this.importProcessor.getFreeIdentifierForPath(path);
-      }
-      return `${this.cjsAutomaticModuleNameResolutions[path]}.${funcName}`;
-    } else {
-      // ESM mode: claim a name for this function and add it to the names that
-      // should be auto-imported when the prefix is generated.
-      if (!this.esmAutomaticImportNameResolutions[funcName]) {
-        this.esmAutomaticImportNameResolutions[funcName] = this.nameManager.claimFreeName(
-          `_${funcName}`,
-        );
-      }
-      return this.esmAutomaticImportNameResolutions[funcName];
+    if (!this.esmAutomaticImportNameResolutions[funcName]) {
+      this.esmAutomaticImportNameResolutions[funcName] = this.nameManager.claimFreeName(
+        `_${funcName}`,
+      );
     }
+    return this.esmAutomaticImportNameResolutions[funcName];
   }
 
   /**

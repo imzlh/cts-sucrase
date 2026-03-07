@@ -1,0 +1,26 @@
+  processExportInterface(): boolean {
+    const interfaceName = this.tokens.identifierNameAtRelativeIndex(2);
+    this.tokens.replaceToken("export const");
+    this.tokens.removeToken();
+    this.tokens.removeToken();
+    while (!this.tokens.matches1(tt.braceL)) {
+      this.tokens.removeToken();
+    }
+    let braceDepth = 0;
+    while (true) {
+      if (this.tokens.matches1(tt.braceL)) {
+        braceDepth++;
+        this.tokens.removeToken();
+      } else if (this.tokens.matches1(tt.braceR)) {
+        braceDepth--;
+        this.tokens.removeToken();
+        if (braceDepth === 0) {
+          break;
+        }
+      } else {
+        this.tokens.removeToken();
+      }
+    }
+    this.tokens.appendCode(` ${interfaceName} = undefined;`);
+    return true;
+  }

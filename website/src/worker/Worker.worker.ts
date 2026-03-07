@@ -223,7 +223,7 @@ function runTypeScript(): {code: string; time: number | null} {
   const {transpileModule, ModuleKind, JsxEmit, ScriptTarget} = TypeScript;
   const {sucraseOptions} = config;
   const invalidTransforms = sucraseOptions.transforms.filter(
-    (t) => !["typescript", "imports", "jsx"].includes(t),
+    (t) => !["typescript", "jsx"].includes(t),
   );
   if (invalidTransforms.length > 0) {
     return {code: `Transform "${invalidTransforms[0]}" is not valid in TypeScript.`, time: null};

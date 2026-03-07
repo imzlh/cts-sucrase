@@ -1,4 +1,3 @@
-import type CJSImportProcessor from "../CJSImportProcessor";
 import type {Options} from "../index";
 import {IdentifierRole} from "../parser/tokenizer";
 import {TokenType as tt} from "../parser/tokenizer/types";
@@ -6,15 +5,11 @@ import type TokenProcessor from "../TokenProcessor";
 import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
 
-/**
- * Implementation of babel-plugin-transform-react-display-name, which adds a
- * display name to usages of React.createClass and createReactClass.
- */
 export default class ReactDisplayNameTransformer extends Transformer {
   constructor(
     readonly rootTransformer: RootTransformer,
     readonly tokens: TokenProcessor,
-    readonly importProcessor: CJSImportProcessor | null,
+    readonly importProcessor: null,
     readonly options: Options,
   ) {
     super();
@@ -23,13 +18,7 @@ export default class ReactDisplayNameTransformer extends Transformer {
   process(): boolean {
     const startIndex = this.tokens.currentIndex();
     if (this.tokens.identifierName() === "createReactClass") {
-      const newName =
-        this.importProcessor && this.importProcessor.getIdentifierReplacement("createReactClass");
-      if (newName) {
-        this.tokens.replaceToken(`(0, ${newName})`);
-      } else {
-        this.tokens.copyToken();
-      }
+      this.tokens.copyToken();
       this.tryProcessCreateClassCall(startIndex);
       return true;
     }
@@ -38,27 +27,15 @@ export default class ReactDisplayNameTransformer extends Transformer {
       this.tokens.identifierName() === "React" &&
       this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2) === "createClass"
     ) {
-      const newName = this.importProcessor
-        ? this.importProcessor.getIdentifierReplacement("React") || "React"
-        : "React";
-      if (newName) {
-        this.tokens.replaceToken(newName);
-        this.tokens.copyToken();
-        this.tokens.copyToken();
-      } else {
-        this.tokens.copyToken();
-        this.tokens.copyToken();
-        this.tokens.copyToken();
-      }
+      this.tokens.copyToken();
+      this.tokens.copyToken();
+      this.tokens.copyToken();
       this.tryProcessCreateClassCall(startIndex);
       return true;
     }
     return false;
   }
 
-  /**
-   * This is called with the token position at the open-paren.
-   */
   private tryProcessCreateClassCall(startIndex: number): void {
     const displayName = this.findDisplayName(startIndex);
     if (!displayName) {
@@ -80,15 +57,12 @@ export default class ReactDisplayNameTransformer extends Transformer {
       return null;
     }
     if (this.tokens.matches2AtIndex(startIndex - 2, tt.name, tt.eq)) {
-      // This is an assignment (or declaration) and the LHS is either an identifier or a member
-      // expression ending in an identifier, so use that identifier name.
       return this.tokens.identifierNameAtIndex(startIndex - 2);
     }
     if (
       startIndex >= 2 &&
       this.tokens.tokens[startIndex - 2].identifierRole === IdentifierRole.ObjectKey
     ) {
-      // This is an object literal value.
       return this.tokens.identifierNameAtIndex(startIndex - 2);
     }
     if (this.tokens.matches2AtIndex(startIndex - 2, tt._export, tt._default)) {
@@ -110,19 +84,11 @@ export default class ReactDisplayNameTransformer extends Transformer {
     }
   }
 
-  /**
-   * We only want to add a display name when this is a function call containing
-   * one argument, which is an object literal without `displayName` as an
-   * existing key.
-   */
   private classNeedsDisplayName(): boolean {
     let index = this.tokens.currentIndex();
     if (!this.tokens.matches2(tt.parenL, tt.braceL)) {
       return false;
     }
-    // The block starts on the {, and we expect any displayName key to be in
-    // that context. We need to ignore other other contexts to avoid matching
-    // nested displayName keys.
     const objectStartIndex = index + 1;
     const objectContextId = this.tokens.tokens[objectStartIndex].contextId;
     if (objectContextId == null) {
@@ -141,7 +107,6 @@ export default class ReactDisplayNameTransformer extends Transformer {
         this.tokens.tokens[index].identifierRole === IdentifierRole.ObjectKey &&
         token.contextId === objectContextId
       ) {
-        // We found a displayName key, so bail out.
         return false;
       }
     }
@@ -150,8 +115,6 @@ export default class ReactDisplayNameTransformer extends Transformer {
       throw new Error("Unexpected end of input when processing React class.");
     }
 
-    // If we got this far, we know we have createClass with an object with no
-    // display name, so we want to proceed as long as that was the only argument.
     return (
       this.tokens.matches1AtIndex(index, tt.parenR) ||
       this.tokens.matches2AtIndex(index, tt.comma, tt.parenR)

@@ -8,9 +8,6 @@ export const Transform = t.union(
   t.lit("jsx"),
   t.lit("typescript"),
   t.lit("flow"),
-  t.lit("imports"),
-  t.lit("react-hot-loader"),
-  t.lit("jest"),
 );
 
 export const SourceMapOptions = t.iface([], {
@@ -26,10 +23,6 @@ export const Options = t.iface([], {
   jsxPragma: t.opt("string"),
   jsxFragmentPragma: t.opt("string"),
   keepUnusedImports: t.opt("boolean"),
-  preserveDynamicImport: t.opt("boolean"),
-  injectCreateRequireForImportRequire: t.opt("boolean"),
-  enableLegacyTypeScriptModuleInterop: t.opt("boolean"),
-  enableLegacyBabel5ModuleInterop: t.opt("boolean"),
   sourceMapOptions: t.opt("SourceMapOptions"),
   filePath: t.opt("string"),
 });
