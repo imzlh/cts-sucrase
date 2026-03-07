@@ -70,27 +70,36 @@ export default class ESMImportTransformer extends Transformer {
     ) {
       return this.processExportType();
     }
+    // `export declare type Foo = ...`
+    if (
+      this.tokens.matches3(tt._export, tt._declare, tt.name) &&
+      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._type)
+    ) {
+      return this.processExportType();
+    }
     return false;
   }
 
   private processExportType(): boolean {
-    const thirdToken = this.tokens.tokenAtRelativeIndex(2);
+    // Peek whether this is `export declare type ...`
+    const hasDeclare = this.tokens.matches3(tt._export, tt._declare, tt.name) &&
+      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._type);
+    const thirdTokenOffset = hasDeclare ? 3 : 2;
+    const thirdToken = this.tokens.tokenAtRelativeIndex(thirdTokenOffset);
     if (!thirdToken) {
       this.tokens.removeInitialToken();
-      while (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken();
-      }
+      while (!this.tokens.isAtEnd()) this.tokens.removeToken();
       return true;
     }
     const isBraceL = thirdToken.type === tt.braceL;
-    // Only extract typeName when the third token is an actual identifier (not `*`, `=`, etc.)
     const typeName = (!isBraceL && thirdToken.type === tt.name)
-      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2)
+      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + thirdTokenOffset)
       : null;
 
     if (isBraceL) {
       const typeNames: string[] = [];
       this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
       this.tokens.removeToken();        // type
       this.tokens.removeToken();        // {
       while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
@@ -101,45 +110,56 @@ export default class ESMImportTransformer extends Transformer {
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
           this.tokens.removeToken();
         }
-        if (this.tokens.matches1(tt.comma)) {
-          this.tokens.removeToken();
-        }
+        if (this.tokens.matches1(tt.comma)) this.tokens.removeToken();
       }
-      if (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken(); // }
-      }
+      if (!this.tokens.isAtEnd()) this.tokens.removeToken(); // }
       const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
       if (hasFrom) {
         this.tokens.removeToken(); // from
         this.tokens.removeToken(); // 'module'
+        removeMaybeImportAttributes(this.tokens); // BUG FIX: handle `with { ... }`
       }
-      if (this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
+      if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
       if (!hasFrom && typeNames.length > 0) {
-        this.tokens.appendCode(`export const ${typeNames[0]} = undefined;`);
-        for (let i = 1; i < typeNames.length; i++) {
-          this.tokens.appendCode(`export const ${typeNames[i]} = undefined;`);
+        for (const name of typeNames) {
+          this.tokens.appendCode(`export const ${name} = undefined;`);
         }
       }
     } else if (typeName) {
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      this.tokens.removeToken();
-      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
-      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
+      // `export [declare] type Foo = <type-expr>;`
+      // Use depth tracking to avoid stopping at semicolons inside type bodies.
+      this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
+      this.tokens.removeToken(); // type
+      this.tokens.removeToken(); // Foo
+      let depth = 0;
+      while (!this.tokens.isAtEnd()) {
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.parenL) ||
+            this.tokens.matches1(tt.lessThan) || this.tokens.matches1(tt.bracketL)) {
+          depth++;
+        } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
+                   this.tokens.matches1(tt.greaterThan) || this.tokens.matches1(tt.bracketR)) {
+          depth--;
+        } else if (depth === 0 && this.tokens.matches1(tt.semi)) {
+          this.tokens.removeToken();
+          break;
+        }
         this.tokens.removeToken();
       }
       this.tokens.appendCode(`export const ${typeName} = undefined;`);
     } else {
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
-      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
+      // `export [declare] type * [as Foo] from '...'` or unrecognized - erase
+      this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
+      this.tokens.removeToken(); // type
+      let depth = 0;
+      while (!this.tokens.isAtEnd()) {
+        if (this.tokens.matches1(tt.braceL)) depth++;
+        else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
+        else if (depth === 0 && this.tokens.matches1(tt.semi)) {
+          this.tokens.removeToken();
+          break;
+        }
         this.tokens.removeToken();
       }
     }

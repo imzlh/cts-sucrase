@@ -8,9 +8,11 @@ import type TokenProcessor from "../TokenProcessor";
  */
 export default function isExportFrom(tokens: TokenProcessor): boolean {
   let closeBraceIndex = tokens.currentIndex();
-  while (!tokens.matches1AtIndex(closeBraceIndex, tt.braceR)) {
+  // Bounded scan: stop at end-of-tokens to avoid infinite loop on malformed input
+  while (closeBraceIndex < tokens.tokens.length && !tokens.matches1AtIndex(closeBraceIndex, tt.braceR)) {
     closeBraceIndex++;
   }
+  if (closeBraceIndex >= tokens.tokens.length) return false;
   return (
     tokens.matchesContextualAtIndex(closeBraceIndex + 1, ContextualKeyword._from) &&
     tokens.matches1AtIndex(closeBraceIndex + 2, tt.string)

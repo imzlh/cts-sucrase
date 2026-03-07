@@ -1,6 +1,5 @@
 import {isTopLevelDeclaration} from "../parser/tokenizer";
 import {TokenType as tt} from "../parser/tokenizer/types";
-import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import type TokenProcessor from "../TokenProcessor";
 
 export interface DeclarationInfo {
@@ -28,25 +27,21 @@ export default function getDeclarationInfo(tokens: TokenProcessor): DeclarationI
   for (let i = 0; i < tokens.tokens.length; i++) {
     const token = tokens.tokens[i];
     if (token.type === tt.name && isTopLevelDeclaration(token)) {
-      const identifierName = tokens.identifierNameForToken(token);
-      
-      // Check for export interface or export type
-      if (i >= 2 && tokens.tokens[i - 2].type === tt._export) {
-        const prevToken = tokens.tokens[i - 1];
-        if (prevToken.type === tt.name && 
-            (prevToken.contextualKeyword === ContextualKeyword._interface || 
-             prevToken.contextualKeyword === ContextualKeyword._type)) {
-          // For export interface and export type, add to both sets
-          typeDeclarations.add(identifierName);
-          valueDeclarations.add(identifierName);
-          continue;
-        }
-      }
-      
       if (token.isType) {
-        typeDeclarations.add(identifierName);
+        typeDeclarations.add(tokens.identifierNameForToken(token));
+        // `export interface Foo` / `export type Foo = ...`:
+        //   tokens[i-2] = `export` (tt._export)
+        // `export declare interface Foo` / `export declare type Foo = ...`:
+        //   tokens[i-2] = `declare` (tt._declare), tokens[i-3] = `export` (tt._export)
+        // The transformer emits `export const Foo = undefined` for these,
+        // so also register as a value export to prevent `export { Foo }` elision.
+        const hasExportAt = (idx: number) =>
+          idx >= 0 && tokens.tokens[idx].type === tt._export;
+        if (hasExportAt(i - 2) || hasExportAt(i - 3)) {
+          valueDeclarations.add(tokens.identifierNameForToken(token));
+        }
       } else {
-        valueDeclarations.add(identifierName);
+        valueDeclarations.add(tokens.identifierNameForToken(token));
       }
     }
   }

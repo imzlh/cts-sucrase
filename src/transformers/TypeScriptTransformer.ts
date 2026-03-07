@@ -4,6 +4,7 @@ import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
 import getImportExportSpecifierInfo from "../util/getImportExportSpecifierInfo";
 import isIdentifier from "../util/isIdentifier";
+import {removeMaybeImportAttributes} from "../util/removeMaybeImportAttributes";
 import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
 
@@ -17,17 +18,23 @@ export default class TypeScriptTransformer extends Transformer {
   }
 
   process(): boolean {
-    if (
-      this.tokens.matches2(tt._export, tt.name) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._interface)
-    ) {
+    // `export interface Foo` or `export declare interface Foo`
+    if (this.tokens.matches2(tt._export, tt.name) &&
+        this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._interface)) {
       return this.processExportInterface();
     }
-    if (
-      this.tokens.matches2(tt._export, tt.name) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._type)
-    ) {
+    if (this.tokens.matches3(tt._export, tt._declare, tt.name) &&
+        this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._interface)) {
+      return this.processExportInterface(/* hasDeclare */ true);
+    }
+    // `export type Foo = ...` or `export declare type Foo = ...`
+    if (this.tokens.matches2(tt._export, tt.name) &&
+        this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._type)) {
       return this.processExportType();
+    }
+    if (this.tokens.matches3(tt._export, tt._declare, tt.name) &&
+        this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._type)) {
+      return this.processExportType(/* hasDeclare */ true);
     }
     if (this.tokens.matchesContextual(ContextualKeyword._interface)) {
       return this.processInterface();
@@ -88,9 +95,13 @@ export default class TypeScriptTransformer extends Transformer {
     return true;
   }
 
-  processExportInterface(): boolean {
-    const thirdToken = this.tokens.tokenAtRelativeIndex(2);
-    if (!thirdToken || thirdToken.type !== tt.name) {
+  processExportInterface(hasDeclare: boolean = false): boolean {
+    // Offset: `export [declare] interface Name`
+    // hasDeclare=false: offsets 0=export, 1=interface, 2=Name
+    // hasDeclare=true:  offsets 0=export, 1=declare,   2=interface, 3=Name
+    const nameOffset = hasDeclare ? 3 : 2;
+    const nameToken = this.tokens.tokenAtRelativeIndex(nameOffset);
+    if (!nameToken || nameToken.type !== tt.name) {
       // Malformed - just erase
       this.tokens.removeInitialToken();
       while (!this.tokens.isAtEnd()) {
@@ -98,9 +109,10 @@ export default class TypeScriptTransformer extends Transformer {
       }
       return true;
     }
-    const interfaceName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
-    // Remove: export, interface, Name, optional generics/extends clause
+    const interfaceName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + nameOffset);
+    // Remove: export, [declare,] interface, Name, optional generics/extends clause
     this.tokens.removeInitialToken(); // export
+    if (hasDeclare) this.tokens.removeToken(); // declare
     this.tokens.removeToken();        // interface
     this.tokens.removeToken();        // Name
     while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceL)) {
@@ -125,74 +137,89 @@ export default class TypeScriptTransformer extends Transformer {
     return true;
   }
 
-  processExportType(): boolean {
-    const thirdToken = this.tokens.tokenAtRelativeIndex(2);
+  processExportType(hasDeclare: boolean = false): boolean {
+    // Offset: `export [declare] type <thirdToken>`
+    const typeKeywordOffset = hasDeclare ? 2 : 1;
+    const thirdTokenOffset = hasDeclare ? 3 : 2;
+    const thirdToken = this.tokens.tokenAtRelativeIndex(thirdTokenOffset);
     if (!thirdToken) {
       this.tokens.removeInitialToken();
-      while (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken();
-      }
+      while (!this.tokens.isAtEnd()) this.tokens.removeToken();
       return true;
     }
     const isBraceL = thirdToken.type === tt.braceL;
     // Only extract typeName when the third token is an actual identifier (not `*`, `=`, etc.)
     const typeName = (!isBraceL && thirdToken.type === tt.name)
-      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2)
+      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + thirdTokenOffset)
       : null;
 
     if (isBraceL) {
+      // `export [declare] type { ... } [from '...']` - re-export or local type group
       const typeNames: string[] = [];
       this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
       this.tokens.removeToken();        // type
       this.tokens.removeToken();        // {
       while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
         const specifierInfo = getImportExportSpecifierInfo(this.tokens);
-        // Only collect the exported (right-side) name; skip `type X` specifiers
         if (!specifierInfo.isType && specifierInfo.rightName) {
           typeNames.push(specifierInfo.rightName);
         }
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
           this.tokens.removeToken();
         }
-        if (this.tokens.matches1(tt.comma)) {
-          this.tokens.removeToken();
-        }
+        if (this.tokens.matches1(tt.comma)) this.tokens.removeToken();
       }
-      if (!this.tokens.isAtEnd()) {
-        this.tokens.removeToken(); // }
-      }
+      if (!this.tokens.isAtEnd()) this.tokens.removeToken(); // }
       const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
       if (hasFrom) {
         this.tokens.removeToken(); // from
         this.tokens.removeToken(); // 'module'
+        removeMaybeImportAttributes(this.tokens);
       }
-      if (this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
+      if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
       if (!hasFrom && typeNames.length > 0) {
-        this.tokens.appendCode(`export const ${typeNames[0]} = undefined;`);
-        for (let i = 1; i < typeNames.length; i++) {
-          this.tokens.appendCode(`export const ${typeNames[i]} = undefined;`);
+        for (const name of typeNames) {
+          this.tokens.appendCode(`export const ${name} = undefined;`);
         }
       }
     } else if (typeName) {
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      this.tokens.removeToken();
-      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
-      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
+      // `export [declare] type Foo = <type-expr>;`
+      // Use brace-depth tracking so `{ a: string; b: number }` doesn't prematurely stop.
+      this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
+      this.tokens.removeToken(); // type
+      this.tokens.removeToken(); // Foo (name)
+      // Remove everything up to and including the terminating semicolon,
+      // tracking brace/bracket/paren depth so inner `;` are not mistaken for the end.
+      let depth = 0;
+      while (!this.tokens.isAtEnd()) {
+        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.parenL) ||
+            this.tokens.matches1(tt.lessThan) || this.tokens.matches1(tt.bracketL)) {
+          depth++;
+        } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
+                   this.tokens.matches1(tt.greaterThan) || this.tokens.matches1(tt.bracketR)) {
+          depth--;
+        } else if (depth === 0 && this.tokens.matches1(tt.semi)) {
+          this.tokens.removeToken();
+          break;
+        }
         this.tokens.removeToken();
       }
       this.tokens.appendCode(`export const ${typeName} = undefined;`);
     } else {
-      this.tokens.removeInitialToken();
-      this.tokens.removeToken();
-      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
-        this.tokens.removeToken();
-      }
-      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
+      // `export [declare] type * [as Foo] from '...'` or other unrecognized form - just erase
+      this.tokens.removeInitialToken(); // export
+      if (hasDeclare) this.tokens.removeToken(); // declare
+      this.tokens.removeToken(); // type
+      let depth = 0;
+      while (!this.tokens.isAtEnd()) {
+        if (this.tokens.matches1(tt.braceL)) depth++;
+        else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
+        else if (depth === 0 && this.tokens.matches1(tt.semi)) {
+          this.tokens.removeToken();
+          break;
+        }
         this.tokens.removeToken();
       }
     }
