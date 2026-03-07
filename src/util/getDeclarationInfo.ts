@@ -15,13 +15,11 @@ export const EMPTY_DECLARATION_INFO: DeclarationInfo = {
 /**
  * Get all top-level identifiers that should be preserved when exported in TypeScript.
  *
- * Examples:
- * - If an identifier is declared as `const x`, then `export {x}` should be preserved.
- * - If it's declared as `type x`, then `export {x}` should be removed.
- * - If it's declared as both `const x` and `type x`, then the export should be preserved.
- * - Classes and enums should be preserved (even though they also introduce types).
- * - Imported identifiers should be preserved since we don't have enough information to
- *   rule them out. --isolatedModules disallows re-exports, which catches errors here.
+ * - `const x` -> valueDeclarations, `export {x}` preserved.
+ * - `type x` -> typeDeclarations only, `export {x}` elided.
+ * - `export interface Foo` / `export type Foo = ...` -> BOTH sets, because the
+ *   transformer generates `export const Foo = undefined` placeholders, so
+ *   `export { Foo }` in the same file must NOT be elided.
  */
 export default function getDeclarationInfo(tokens: TokenProcessor): DeclarationInfo {
   const typeDeclarations: Set<string> = new Set();
@@ -31,6 +29,13 @@ export default function getDeclarationInfo(tokens: TokenProcessor): DeclarationI
     if (token.type === tt.name && isTopLevelDeclaration(token)) {
       if (token.isType) {
         typeDeclarations.add(tokens.identifierNameForToken(token));
+        // `export interface Foo` or `export type Foo = ...`:
+        // token at i-2 is `export`, token at i-1 is `interface`/`type`.
+        // The transformer emits `export const Foo = undefined` for these,
+        // so also add to valueDeclarations to prevent `export { Foo }` elision.
+        if (i >= 2 && tokens.tokens[i - 2].type === tt._export) {
+          valueDeclarations.add(tokens.identifierNameForToken(token));
+        }
       } else {
         valueDeclarations.add(tokens.identifierNameForToken(token));
       }

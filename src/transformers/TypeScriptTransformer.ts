@@ -91,7 +91,7 @@ export default class TypeScriptTransformer extends Transformer {
   processExportInterface(): boolean {
     const thirdToken = this.tokens.tokenAtRelativeIndex(2);
     if (!thirdToken || thirdToken.type !== tt.name) {
-      // No valid interface name - remove the whole declaration
+      // Malformed - just erase
       this.tokens.removeInitialToken();
       while (!this.tokens.isAtEnd()) {
         this.tokens.removeToken();
@@ -99,12 +99,14 @@ export default class TypeScriptTransformer extends Transformer {
       return true;
     }
     const interfaceName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
-    this.tokens.replaceToken("export const");
-    this.tokens.removeToken();
-    this.tokens.removeToken();
+    // Remove: export, interface, Name, optional generics/extends clause
+    this.tokens.removeInitialToken(); // export
+    this.tokens.removeToken();        // interface
+    this.tokens.removeToken();        // Name
     while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceL)) {
-      this.tokens.removeToken();
+      this.tokens.removeToken();      // generics, extends, etc.
     }
+    // Remove the body braces
     let braceDepth = 0;
     while (!this.tokens.isAtEnd()) {
       if (this.tokens.matches1(tt.braceL)) {
@@ -113,14 +115,13 @@ export default class TypeScriptTransformer extends Transformer {
       } else if (this.tokens.matches1(tt.braceR)) {
         braceDepth--;
         this.tokens.removeToken();
-        if (braceDepth === 0) {
-          break;
-        }
+        if (braceDepth === 0) break;
       } else {
         this.tokens.removeToken();
       }
     }
-    this.tokens.appendCode(` ${interfaceName} = undefined;`);
+    // Emit placeholder so the name is a real export binding at runtime
+    this.tokens.appendCode(`export const ${interfaceName} = undefined;`);
     return true;
   }
 
