@@ -75,6 +75,13 @@ export default class ESMImportTransformer extends Transformer {
 
   private processExportType(): boolean {
     const thirdToken = this.tokens.tokenAtRelativeIndex(2);
+    if (!thirdToken) {
+      this.tokens.removeInitialToken();
+      while (!this.tokens.isAtEnd()) {
+        this.tokens.removeToken();
+      }
+      return true;
+    }
     const isBraceL = thirdToken.type === tt.braceL;
     const typeName = isBraceL ? null : this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
     
@@ -83,13 +90,15 @@ export default class ESMImportTransformer extends Transformer {
       this.tokens.removeInitialToken();
       this.tokens.removeToken();
       this.tokens.removeToken();
-      while (!this.tokens.matches1(tt.braceR)) {
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
         if (this.tokens.matches1(tt.name)) {
           typeNames.push(this.tokens.identifierName());
         }
         this.tokens.removeToken();
       }
-      this.tokens.removeToken();
+      if (!this.tokens.isAtEnd()) {
+        this.tokens.removeToken();
+      }
       const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
       if (hasFrom) {
         this.tokens.removeToken();
@@ -108,22 +117,20 @@ export default class ESMImportTransformer extends Transformer {
       this.tokens.removeInitialToken();
       this.tokens.removeToken();
       this.tokens.removeToken();
-      while (!this.tokens.matches1(tt.semi) && !this.tokens.isAtEnd()) {
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      if (this.tokens.matches1(tt.semi)) {
+      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
       this.tokens.appendCode(`export const ${typeName} = undefined;`);
     } else {
       this.tokens.removeInitialToken();
-      while (!this.tokens.matches1(tt.string) && !this.tokens.isAtEnd()) {
+      this.tokens.removeToken();
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      if (this.tokens.matches1(tt.string)) {
-        this.tokens.removeToken();
-      }
-      if (this.tokens.matches1(tt.semi)) {
+      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
     }

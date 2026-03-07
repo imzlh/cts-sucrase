@@ -22,6 +22,12 @@ export default class TypeScriptTransformer extends Transformer {
     ) {
       return this.processExportInterface();
     }
+    if (
+      this.tokens.matches2(tt._export, tt.name) &&
+      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._type)
+    ) {
+      return this.processExportType();
+    }
     if (this.tokens.matchesContextual(ContextualKeyword._interface)) {
       return this.processInterface();
     }
@@ -82,15 +88,23 @@ export default class TypeScriptTransformer extends Transformer {
   }
 
   processExportInterface(): boolean {
+    const thirdToken = this.tokens.tokenAtRelativeIndex(2);
+    if (!thirdToken) {
+      this.tokens.removeInitialToken();
+      while (!this.tokens.isAtEnd()) {
+        this.tokens.removeToken();
+      }
+      return true;
+    }
     const interfaceName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
     this.tokens.replaceToken("export const");
     this.tokens.removeToken();
     this.tokens.removeToken();
-    while (!this.tokens.matches1(tt.braceL)) {
+    while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceL)) {
       this.tokens.removeToken();
     }
     let braceDepth = 0;
-    while (true) {
+    while (!this.tokens.isAtEnd()) {
       if (this.tokens.matches1(tt.braceL)) {
         braceDepth++;
         this.tokens.removeToken();
@@ -110,51 +124,62 @@ export default class TypeScriptTransformer extends Transformer {
 
   processExportType(): boolean {
     const thirdToken = this.tokens.tokenAtRelativeIndex(2);
+    if (!thirdToken) {
+      this.tokens.removeInitialToken();
+      while (!this.tokens.isAtEnd()) {
+        this.tokens.removeToken();
+      }
+      return true;
+    }
     const isBraceL = thirdToken.type === tt.braceL;
     const typeName = isBraceL ? null : this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 2);
-    this.tokens.replaceToken("export const");
-    this.tokens.removeToken();
-    if (this.tokens.matches1(tt.braceL)) {
+    
+    if (isBraceL) {
       const typeNames: string[] = [];
+      this.tokens.removeInitialToken();
       this.tokens.removeToken();
-      while (!this.tokens.matches1(tt.braceR)) {
+      this.tokens.removeToken();
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
         if (this.tokens.matches1(tt.name)) {
           typeNames.push(this.tokens.identifierName());
         }
         this.tokens.removeToken();
       }
-      this.tokens.removeToken();
-      if (this.tokens.matchesContextual(ContextualKeyword._from)) {
+      if (!this.tokens.isAtEnd()) {
+        this.tokens.removeToken();
+      }
+      const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
+      if (hasFrom) {
         this.tokens.removeToken();
         this.tokens.removeToken();
       }
       if (this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      if (typeNames.length > 0) {
-        this.tokens.appendCode(` ${typeNames[0]} = undefined;`);
+      if (!hasFrom && typeNames.length > 0) {
+        this.tokens.appendCode(`export const ${typeNames[0]} = undefined;`);
         for (let i = 1; i < typeNames.length; i++) {
           this.tokens.appendCode(`export const ${typeNames[i]} = undefined;`);
         }
       }
-    } else if (this.tokens.matches1(tt.name)) {
+    } else if (typeName) {
+      this.tokens.removeInitialToken();
       this.tokens.removeToken();
-      while (!this.tokens.matches1(tt.semi) && !this.tokens.isAtEnd()) {
+      this.tokens.removeToken();
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      if (this.tokens.matches1(tt.semi)) {
+      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      this.tokens.appendCode(` ${typeName} = undefined;`);
-    } else if (this.tokens.matches1(tt.star)) {
-      this.tokens.replaceTokenTrimmingLeftWhitespace("");
-      while (!this.tokens.matches1(tt.string) && !this.tokens.isAtEnd()) {
+      this.tokens.appendCode(`export const ${typeName} = undefined;`);
+    } else {
+      this.tokens.removeInitialToken();
+      this.tokens.removeToken();
+      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
-      if (this.tokens.matches1(tt.string)) {
-        this.tokens.removeToken();
-      }
-      if (this.tokens.matches1(tt.semi)) {
+      if (!this.tokens.isAtEnd() && this.tokens.matches1(tt.semi)) {
         this.tokens.removeToken();
       }
     }

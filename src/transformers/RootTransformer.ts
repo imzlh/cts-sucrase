@@ -47,6 +47,12 @@ export default class RootTransformer {
       );
     }
 
+    if (transforms.includes("typescript")) {
+      this.transformers.push(
+        new TypeScriptTransformer(this, this.tokens, false),
+      );
+    }
+
     this.transformers.push(
       new ESMImportTransformer(
         this.tokens,
@@ -63,11 +69,6 @@ export default class RootTransformer {
     if (transforms.includes("flow")) {
       this.transformers.push(
         new FlowTransformer(this, this.tokens, false),
-      );
-    }
-    if (transforms.includes("typescript")) {
-      this.transformers.push(
-        new TypeScriptTransformer(this, this.tokens, false),
       );
     }
   }

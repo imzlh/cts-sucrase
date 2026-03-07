@@ -20,6 +20,7 @@ export default class UsingTransformer extends Transformer {
     ) {
       const nextToken = this.tokens.tokenAtRelativeIndex(1);
       if (
+        nextToken &&
         nextToken.type === tt.name &&
         this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._using)
       ) {
