@@ -1,6 +1,0 @@
-{
-  "include": ["src/*[!-test].ts"],
-  "compilerOptions": {
-    "outDir": "dist-actual"
-  }
-}

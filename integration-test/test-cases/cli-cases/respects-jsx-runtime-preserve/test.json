@@ -1,3 +1,0 @@
-{
-  "cliOptions": "--transforms jsx,typescript --jsx-runtime preserve"
-}

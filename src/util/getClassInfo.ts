@@ -121,6 +121,9 @@ export default function getClassInfo(
         skipToNextClassElement(tokens, classContextId);
         continue;
       }
+      // `field!` definite assignment assertion - purely TS, counts as declare-like
+      const hasNonNull = tokens.matches1(tt.nonNullAssertion);
+      if (hasNonNull) tokens.nextToken();
       // There might be a type annotation that we need to skip.
       while (tokens.currentToken().isType) {
         tokens.nextToken();
@@ -151,12 +154,10 @@ export default function getClassInfo(
           start: nameStartIndex,
           end: tokens.currentIndex(),
         });
-      } else if (!disableESTransforms || isDeclareOrAbstract) {
-        // This is a regular field declaration, like `x;`. With the class transform enabled, we just
-        // remove the line so that no output is produced. With the class transform disabled, we
-        // usually want to preserve the declaration (but still strip types), but if the `declare`
-        // or `abstract` keyword is specified, we should remove the line to avoid initializing the
-        // value to undefined.
+      } else {
+        // This is a regular field declaration, like `x;`. We should remove the line to avoid
+        // invalid JavaScript syntax. TypeScript class property declarations without initializers
+        // should be removed entirely from the output.
         rangesToRemove.push({start: statementStartIndex, end: tokens.currentIndex()});
       }
     }

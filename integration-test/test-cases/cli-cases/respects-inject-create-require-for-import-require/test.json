@@ -1,3 +1,0 @@
-{
-  "cliOptions": "--transforms typescript --inject-create-require-for-import-require"
-}

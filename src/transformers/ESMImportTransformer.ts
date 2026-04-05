@@ -142,8 +142,8 @@ export default class ESMImportTransformer extends Transformer {
         } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
                    this.tokens.matches1(tt.bracketR)) {
           depth--;
-        } else if (depth === 0 && this.tokens.matches1(tt.semi)) {
-          this.tokens.removeToken();
+        } else if (depth === 0 && !this.tokens.currentToken().isType) {
+          if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
           break;
         }
         this.tokens.removeToken();
@@ -160,8 +160,8 @@ export default class ESMImportTransformer extends Transformer {
       while (!this.tokens.isAtEnd()) {
         if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL)) depth++;
         else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
-        else if (depth === 0 && this.tokens.matches1(tt.semi)) {
-          this.tokens.removeToken();
+        else if (depth === 0 && !this.tokens.currentToken().isType) {
+          if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
           break;
         }
         this.tokens.removeToken();
