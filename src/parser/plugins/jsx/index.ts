@@ -240,7 +240,7 @@ function jsxParseClosingElement(): void {
 // Does not parse the last token.
 function jsxParseElementAt(): void {
   const initialTokenIndex = state.tokens.length - 1;
-  state.tokens[initialTokenIndex].jsxRole = JSXRole.NoChildren;
+  state.tokens[initialTokenIndex].jsxRole = JSXRole.NoChildren as JSXRole | null;
   let numExplicitChildren = 0;
   const isSelfClosing = jsxParseOpeningElement(initialTokenIndex);
   if (!isSelfClosing) {
