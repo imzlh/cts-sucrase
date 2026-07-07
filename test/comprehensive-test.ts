@@ -12,7 +12,7 @@ function assertResult(
 
 describe("comprehensive transformer tests", () => {
   describe("transformer execution order", () => {
-    it("handles using and type export in same file", () => {
+    it("preserves using and handles type export in same file", () => {
       const source = `
 using resource = getResource();
 export type ID = string | number;
@@ -23,7 +23,7 @@ const x: number = 1;
 `;
       const result = transform(source, {transforms: ["typescript"]});
       
-      assert.ok(result.code.includes("const resource"));
+      assert.ok(result.code.includes("using resource"));
       assert.ok(result.code.includes("export const ID = undefined"));
       assert.ok(result.code.includes("const x = 1"));
       assert.ok(result.code.includes("const IUser = undefined"));
@@ -62,13 +62,13 @@ export const value = 1;
       assert.ok(result.code.length > 0);
     });
 
-    it("handles using in async function", () => {
+    it("preserves await using in async function", () => {
       const source = `async function test() { await using resource = getResource(); }`;
       const result = transform(source, {transforms: ["typescript"]});
-      assert.ok(result.code.includes("const resource"));
+      assert.ok(result.code.includes("await using resource"));
     });
 
-    it("handles nested using statements", () => {
+    it("preserves nested using statements", () => {
       const source = `
 function outer() {
   using a = getA();
@@ -78,8 +78,8 @@ function outer() {
 }
 `;
       const result = transform(source, {transforms: ["typescript"]});
-      assert.ok(result.code.includes("const a = getA()"));
-      assert.ok(result.code.includes("const b = getB()"));
+      assert.ok(result.code.includes("using a = getA()"));
+      assert.ok(result.code.includes("using b = getB()"));
     });
   });
 
@@ -96,7 +96,7 @@ export interface User {
 export type UserResponse = User & { createdAt: Date };
 
 async function getUser(req: Request, res: Response) {
-  using db = await connectDB();
+  await using db: Database = await connectDB();
   const user = await db.getUser(req.params.id);
   return res.json(user);
 }
@@ -106,7 +106,7 @@ async function getUser(req: Request, res: Response) {
       assert.ok(result.code.includes("export const"));
       assert.ok(result.code.includes("User = undefined"));
       assert.ok(result.code.includes("UserResponse = undefined"));
-      assert.ok(result.code.includes("const db = await connectDB()"));
+      assert.ok(result.code.includes("await using db = await connectDB()"));
       assert.ok(!result.code.includes("interface"));
       assert.ok(!result.code.includes("type"));
     });

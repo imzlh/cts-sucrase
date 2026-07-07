@@ -1,9 +1,10 @@
 import type {Options} from "../index";
 import type NameManager from "../NameManager";
 import XHTMLEntities from "../parser/plugins/jsx/xhtml";
-import {JSXRole} from "../parser/tokenizer";
+import {JSXRole, type Token} from "../parser/tokenizer";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import {charCodes} from "../parser/util/charcodes";
+import {IS_WHITESPACE} from "../parser/util/whitespace";
 import type TokenProcessor from "../TokenProcessor";
 import getJSXPragmaInfo, {type JSXPragmaInfo} from "../util/getJSXPragmaInfo";
 import type RootTransformer from "./RootTransformer";
@@ -18,7 +19,11 @@ export default class JSXTransformer extends Transformer {
   lastIndex: number = 0;
 
   filenameVarName: string | null = null;
-  esmAutomaticImportNameResolutions: {[name: string]: string} = {};
+  autoCreateElementName: string | null = null;
+  autoFragmentName: string | null = null;
+  autoJSXName: string | null = null;
+  autoJSXSName: string | null = null;
+  autoJSXDEVName: string | null = null;
 
   constructor(
     readonly rootTransformer: RootTransformer,
@@ -34,7 +39,7 @@ export default class JSXTransformer extends Transformer {
   }
 
   process(): boolean {
-    if (this.tokens.matches1(tt.jsxTagStart)) {
+    if (this.tokens.tokens[this.tokens.currentIndex()].type === tt.jsxTagStart) {
       this.processJSXTag();
       return true;
     }
@@ -44,17 +49,29 @@ export default class JSXTransformer extends Transformer {
   getPrefixCode(): string {
     let prefix = "";
     if (this.filenameVarName) {
-      prefix += `const ${this.filenameVarName} = ${JSON.stringify(this.options.filePath || "")};`;
+      prefix += `const ${this.filenameVarName} = ${stringLiteralForJSXValue(this.options.filePath || "")};`;
     }
     if (this.isAutomaticRuntime) {
-      const {createElement: createElementResolution, ...otherResolutions} =
-        this.esmAutomaticImportNameResolutions;
+      const createElementResolution = this.autoCreateElementName;
       if (createElementResolution) {
         prefix += `import {createElement as ${createElementResolution}} from "${this.jsxImportSource}";`;
       }
-      const importSpecifiers = Object.entries(otherResolutions)
-        .map(([name, resolvedName]) => `${name} as ${resolvedName}`)
-        .join(", ");
+      let importSpecifiers = "";
+      if (this.autoFragmentName !== null) {
+        importSpecifiers = `Fragment as ${this.autoFragmentName}`;
+      }
+      if (this.autoJSXName !== null) {
+        importSpecifiers += importSpecifiers === "" ? "" : ", ";
+        importSpecifiers += `jsx as ${this.autoJSXName}`;
+      }
+      if (this.autoJSXSName !== null) {
+        importSpecifiers += importSpecifiers === "" ? "" : ", ";
+        importSpecifiers += `jsxs as ${this.autoJSXSName}`;
+      }
+      if (this.autoJSXDEVName !== null) {
+        importSpecifiers += importSpecifiers === "" ? "" : ", ";
+        importSpecifiers += `jsxDEV as ${this.autoJSXDEVName}`;
+      }
       if (importSpecifiers) {
         const importPath =
           this.jsxImportSource + (this.options.production ? "/jsx-runtime" : "/jsx-dev-runtime");
@@ -65,7 +82,8 @@ export default class JSXTransformer extends Transformer {
   }
 
   processJSXTag(): void {
-    const {jsxRole, start} = this.tokens.currentToken();
+    const token = this.tokens.tokens[this.tokens.currentIndex()];
+    const {jsxRole, start} = token;
     // Calculate line number information at the very start (if in development
     // mode) so that the information is guaranteed to be queried in token order.
     const elementLocationCode = this.options.production ? null : this.getElementLocationCode(start);
@@ -87,11 +105,15 @@ export default class JSXTransformer extends Transformer {
    */
   getLineNumberForIndex(index: number): number {
     const code = this.tokens.code;
-    while (this.lastIndex < index && this.lastIndex < code.length) {
-      if (code[this.lastIndex] === "\n") {
-        this.lastLineNumber++;
-      }
-      this.lastIndex++;
+    const end = index < code.length ? index : code.length;
+    let newlineIndex = code.indexOf("\n", this.lastIndex);
+    while (newlineIndex !== -1 && newlineIndex < end) {
+      this.lastLineNumber++;
+      this.lastIndex = newlineIndex + 1;
+      newlineIndex = code.indexOf("\n", this.lastIndex);
+    }
+    if (this.lastIndex < end) {
+      this.lastIndex = end;
     }
     return this.lastLineNumber;
   }
@@ -111,7 +133,8 @@ export default class JSXTransformer extends Transformer {
     this.tokens.replaceToken(this.getJSXFuncInvocationCode(isStatic));
 
     let keyCode = null;
-    if (this.tokens.matches1(tt.jsxTagEnd)) {
+    const tokenList = this.tokens.tokens;
+    if (tokenList[this.tokens.currentIndex()].type === tt.jsxTagEnd) {
       // Fragment syntax.
       this.tokens.replaceToken(`${this.getFragmentCode()}, {`);
       this.processAutomaticChildrenAndEndProps(jsxRole);
@@ -121,10 +144,12 @@ export default class JSXTransformer extends Transformer {
       this.tokens.appendCode(", {");
       keyCode = this.processProps(true);
 
-      if (this.tokens.matches2(tt.slash, tt.jsxTagEnd)) {
+      const tokenIndex = this.tokens.currentIndex();
+      const tokenType = tokenList[tokenIndex].type;
+      if (tokenType === tt.slash && tokenList[tokenIndex + 1].type === tt.jsxTagEnd) {
         // Self-closing tag, no children to add, so close the props.
         this.tokens.appendCode("}");
-      } else if (this.tokens.matches1(tt.jsxTagEnd)) {
+      } else if (tokenType === tt.jsxTagEnd) {
         // Tag with children.
         this.tokens.removeToken();
         this.processAutomaticChildrenAndEndProps(jsxRole);
@@ -150,7 +175,7 @@ export default class JSXTransformer extends Transformer {
     // We're at the close-tag or the end of a self-closing tag, so remove
     // everything else and close the function call.
     this.tokens.removeInitialToken();
-    while (!this.tokens.matches1(tt.jsxTagEnd)) {
+    while (tokenList[this.tokens.currentIndex()].type !== tt.jsxTagEnd) {
       this.tokens.removeToken();
     }
     this.tokens.replaceToken(")");
@@ -170,7 +195,8 @@ export default class JSXTransformer extends Transformer {
     // First tag is always jsxTagStart.
     this.tokens.replaceToken(this.getCreateElementInvocationCode());
 
-    if (this.tokens.matches1(tt.jsxTagEnd)) {
+    const tokenList = this.tokens.tokens;
+    if (tokenList[this.tokens.currentIndex()].type === tt.jsxTagEnd) {
       // Fragment syntax.
       this.tokens.replaceToken(`${this.getFragmentCode()}, null`);
       this.processChildren(true);
@@ -179,9 +205,11 @@ export default class JSXTransformer extends Transformer {
       this.processTagIntro();
       this.processPropsObjectWithDevInfo(elementLocationCode);
 
-      if (this.tokens.matches2(tt.slash, tt.jsxTagEnd)) {
+      const tokenIndex = this.tokens.currentIndex();
+      const tokenType = tokenList[tokenIndex].type;
+      if (tokenType === tt.slash && tokenList[tokenIndex + 1].type === tt.jsxTagEnd) {
         // Self-closing tag; no children to process.
-      } else if (this.tokens.matches1(tt.jsxTagEnd)) {
+      } else if (tokenType === tt.jsxTagEnd) {
         // Tag with children and a close-tag; process the children as args.
         this.tokens.removeToken();
         this.processChildren(true);
@@ -192,7 +220,7 @@ export default class JSXTransformer extends Transformer {
     // We're at the close-tag or the end of a self-closing tag, so remove
     // everything else and close the function call.
     this.tokens.removeInitialToken();
-    while (!this.tokens.matches1(tt.jsxTagEnd)) {
+    while (tokenList[this.tokens.currentIndex()].type !== tt.jsxTagEnd) {
       this.tokens.removeToken();
     }
     this.tokens.replaceToken(")");
@@ -209,12 +237,12 @@ export default class JSXTransformer extends Transformer {
   getJSXFuncInvocationCode(isStatic: boolean): string {
     if (this.options.production) {
       if (isStatic) {
-        return this.claimAutoImportedFuncInvocation("jsxs", "/jsx-runtime");
+        return this.claimAutoImportedFuncInvocation("jsxs");
       } else {
-        return this.claimAutoImportedFuncInvocation("jsx", "/jsx-runtime");
+        return this.claimAutoImportedFuncInvocation("jsx");
       }
     } else {
-      return this.claimAutoImportedFuncInvocation("jsxDEV", "/jsx-dev-runtime");
+      return this.claimAutoImportedFuncInvocation("jsxDEV");
     }
   }
 
@@ -230,7 +258,7 @@ export default class JSXTransformer extends Transformer {
    */
   getCreateElementInvocationCode(): string {
     if (this.isAutomaticRuntime) {
-      return this.claimAutoImportedFuncInvocation("createElement", "");
+      return this.claimAutoImportedFuncInvocation("createElement");
     } else {
       const {jsxPragmaInfo} = this;
       return `${jsxPragmaInfo.base}${jsxPragmaInfo.suffix}(`;
@@ -239,28 +267,33 @@ export default class JSXTransformer extends Transformer {
 
   getFragmentCode(): string {
     if (this.isAutomaticRuntime) {
-      return this.claimAutoImportedName(
-        "Fragment",
-        this.options.production ? "/jsx-runtime" : "/jsx-dev-runtime",
-      );
+      return this.claimAutoImportedName("Fragment");
     } else {
       const {jsxPragmaInfo} = this;
       return jsxPragmaInfo.fragmentBase + jsxPragmaInfo.fragmentSuffix;
     }
   }
 
-  claimAutoImportedFuncInvocation(funcName: string, importPathSuffix: string): string {
-    const funcCode = this.claimAutoImportedName(funcName, importPathSuffix);
+  claimAutoImportedFuncInvocation(funcName: string): string {
+    const funcCode = this.claimAutoImportedName(funcName);
     return `${funcCode}(`;
   }
 
-  claimAutoImportedName(funcName: string, importPathSuffix: string): string {
-    if (!this.esmAutomaticImportNameResolutions[funcName]) {
-      this.esmAutomaticImportNameResolutions[funcName] = this.nameManager.claimFreeName(
-        `_${funcName}`,
-      );
+  claimAutoImportedName(funcName: string): string {
+    switch (funcName) {
+      case "createElement":
+        return this.autoCreateElementName ??= this.nameManager.claimFreeName("_createElement");
+      case "Fragment":
+        return this.autoFragmentName ??= this.nameManager.claimFreeName("_Fragment");
+      case "jsx":
+        return this.autoJSXName ??= this.nameManager.claimFreeName("_jsx");
+      case "jsxs":
+        return this.autoJSXSName ??= this.nameManager.claimFreeName("_jsxs");
+      case "jsxDEV":
+        return this.autoJSXDEVName ??= this.nameManager.claimFreeName("_jsxDEV");
+      default:
+        throw new Error(`Unexpected JSX automatic import ${funcName}.`);
     }
-    return this.esmAutomaticImportNameResolutions[funcName];
   }
 
   /**
@@ -273,20 +306,27 @@ export default class JSXTransformer extends Transformer {
     // [open brace] to start the first prop.
     // [jsxTagEnd] to end the open-tag.
     // [slash, jsxTagEnd] to end the self-closing tag.
-    let introEnd = this.tokens.currentIndex() + 1;
-    while (
-      this.tokens.tokens[introEnd].isType ||
-      (!this.tokens.matches2AtIndex(introEnd - 1, tt.jsxName, tt.jsxName) &&
-        !this.tokens.matches2AtIndex(introEnd - 1, tt.greaterThan, tt.jsxName) &&
-        !this.tokens.matches1AtIndex(introEnd, tt.braceL) &&
-        !this.tokens.matches1AtIndex(introEnd, tt.jsxTagEnd) &&
-        !this.tokens.matches2AtIndex(introEnd, tt.slash, tt.jsxTagEnd))
-    ) {
+    const tokenList = this.tokens.tokens;
+    const startIndex = this.tokens.currentIndex();
+    let introEnd = startIndex + 1;
+    while (true) {
+      const token = tokenList[introEnd];
+      const prevType = tokenList[introEnd - 1].type;
+      const tokenType = token.type;
+      if (!token.isType &&
+          (tokenType === tt.braceL ||
+            tokenType === tt.jsxTagEnd ||
+            (prevType === tt.jsxName && tokenType === tt.jsxName) ||
+            (prevType === tt.greaterThan && tokenType === tt.jsxName) ||
+            (tokenType === tt.slash && tokenList[introEnd + 1].type === tt.jsxTagEnd))) {
+        break;
+      }
       introEnd++;
     }
-    if (introEnd === this.tokens.currentIndex() + 1) {
-      const tagName = this.tokens.identifierName();
-      if (startsWithLowerCase(tagName)) {
+    if (introEnd === startIndex + 1) {
+      const tagToken = tokenList[startIndex];
+      if (startsWithLowerCaseAt(this.tokens.code, tagToken.start)) {
+        const tagName = this.tokens.identifierNameForToken(tagToken);
         this.tokens.replaceToken(`'${tagName}'`);
       }
     }
@@ -303,7 +343,8 @@ export default class JSXTransformer extends Transformer {
     const devProps = this.options.production
       ? ""
       : `__self: this, __source: ${this.getDevSource(elementLocationCode!)}`;
-    if (!this.tokens.matches1(tt.jsxName) && !this.tokens.matches1(tt.braceL)) {
+    const tokenType = this.tokens.tokens[this.tokens.currentIndex()].type;
+    if (tokenType !== tt.jsxName && tokenType !== tt.braceL) {
       if (devProps) {
         this.tokens.appendCode(`, {${devProps}}`);
       } else {
@@ -332,11 +373,14 @@ export default class JSXTransformer extends Transformer {
    */
   processProps(extractKeyCode: boolean): string | null {
     let keyCode = null;
+    const tokenList = this.tokens.tokens;
     while (true) {
-      if (this.tokens.matches2(tt.jsxName, tt.eq)) {
+      const tokenIndex = this.tokens.currentIndex();
+      const token = tokenList[tokenIndex];
+      const tokenType = token.type;
+      if (tokenType === tt.jsxName && tokenList[tokenIndex + 1].type === tt.eq) {
         // This is a regular key={value} or key="value" prop.
-        const propName = this.tokens.identifierName();
-        if (extractKeyCode && propName === "key") {
+        if (extractKeyCode && tokenMatchesCode(this.tokens.code, token, "key")) {
           if (keyCode !== null) {
             // The props list has multiple keys. Different implementations are
             // inconsistent about what to do here: as of this writing, Babel and
@@ -348,28 +392,27 @@ export default class JSXTransformer extends Transformer {
             // Since we won't ever be emitting the previous key code, we need to
             // at least emit its newlines here so that the line numbers match up
             // in the long run.
-            this.tokens.appendCode(keyCode.replace(/[^\n]/g, ""));
+            this.tokens.appendCode(keepLineFeeds(keyCode));
           }
           // key
           this.tokens.removeToken();
           // =
           this.tokens.removeToken();
-          const snapshot = this.tokens.snapshot();
+          const savedResultCodeLength = this.tokens.currentResultCodeLength();
           this.processPropValue();
-          keyCode = this.tokens.dangerouslyGetAndRemoveCodeSinceSnapshot(snapshot);
+          keyCode = this.tokens.dangerouslyGetAndRemoveCodeSince(savedResultCodeLength);
           // Don't add a comma
           continue;
         } else {
-          this.processPropName(propName);
+          this.processPropName(token);
           this.tokens.replaceToken(": ");
           this.processPropValue();
         }
-      } else if (this.tokens.matches1(tt.jsxName)) {
+      } else if (tokenType === tt.jsxName) {
         // This is a shorthand prop like <input disabled />.
-        const propName = this.tokens.identifierName();
-        this.processPropName(propName);
+        this.processPropName(token);
         this.tokens.appendCode(": true");
-      } else if (this.tokens.matches1(tt.braceL)) {
+      } else if (tokenType === tt.braceL) {
         // This is prop spread, like <div {...getProps()}>, which we can pass
         // through fairly directly as an object spread.
         this.tokens.replaceToken("");
@@ -383,8 +426,9 @@ export default class JSXTransformer extends Transformer {
     return keyCode;
   }
 
-  processPropName(propName: string): void {
-    if (propName.includes("-")) {
+  processPropName(token: Token): void {
+    if (tokenHasHyphen(this.tokens.code, token)) {
+      const propName = this.tokens.identifierNameForToken(token);
       this.tokens.replaceToken(`'${propName}'`);
     } else {
       this.tokens.copyToken();
@@ -392,11 +436,12 @@ export default class JSXTransformer extends Transformer {
   }
 
   processPropValue(): void {
-    if (this.tokens.matches1(tt.braceL)) {
+    const tokenType = this.tokens.tokens[this.tokens.currentIndex()].type;
+    if (tokenType === tt.braceL) {
       this.tokens.replaceToken("");
       this.rootTransformer.processBalancedCode();
       this.tokens.replaceToken("");
-    } else if (this.tokens.matches1(tt.jsxTagStart)) {
+    } else if (tokenType === tt.jsxTagStart) {
       this.processJSXTag();
     } else {
       this.processStringPropValue();
@@ -404,11 +449,10 @@ export default class JSXTransformer extends Transformer {
   }
 
   processStringPropValue(): void {
-    const token = this.tokens.currentToken();
+    const token = this.tokens.tokens[this.tokens.currentIndex()];
     const valueCode = this.tokens.code.slice(token.start + 1, token.end - 1);
-    const replacementCode = formatJSXTextReplacement(valueCode);
-    const literalCode = formatJSXStringValueLiteral(valueCode);
-    this.tokens.replaceToken(literalCode + replacementCode);
+    const formatted = formatJSXStringValue(valueCode);
+    this.tokens.replaceToken(formatted.literal + formatted.replacement);
   }
 
   /**
@@ -439,14 +483,17 @@ export default class JSXTransformer extends Transformer {
    */
   processChildren(needsInitialComma: boolean): void {
     let needsComma = needsInitialComma;
+    const tokenList = this.tokens.tokens;
     while (true) {
-      if (this.tokens.matches2(tt.jsxTagStart, tt.slash)) {
+      const tokenIndex = this.tokens.currentIndex();
+      const tokenType = tokenList[tokenIndex].type;
+      if (tokenType === tt.jsxTagStart && tokenList[tokenIndex + 1].type === tt.slash) {
         // Closing tag, so no more children.
         return;
       }
       let didEmitElement = false;
-      if (this.tokens.matches1(tt.braceL)) {
-        if (this.tokens.matches2(tt.braceL, tt.braceR)) {
+      if (tokenType === tt.braceL) {
+        if (tokenList[tokenIndex + 1].type === tt.braceR) {
           // Empty interpolations and comment-only interpolations are allowed
           // and don't create an extra child arg.
           this.tokens.replaceToken("");
@@ -458,12 +505,12 @@ export default class JSXTransformer extends Transformer {
           this.tokens.replaceToken("");
           didEmitElement = true;
         }
-      } else if (this.tokens.matches1(tt.jsxTagStart)) {
+      } else if (tokenType === tt.jsxTagStart) {
         // Child JSX element
         this.tokens.appendCode(needsComma ? ", " : "");
         this.processJSXTag();
         didEmitElement = true;
-      } else if (this.tokens.matches1(tt.jsxText) || this.tokens.matches1(tt.jsxEmptyText)) {
+      } else if (tokenType === tt.jsxText || tokenType === tt.jsxEmptyText) {
         didEmitElement = this.processChildTextElement(needsComma);
       } else {
         throw new Error("Unexpected token when processing JSX children.");
@@ -481,15 +528,14 @@ export default class JSXTransformer extends Transformer {
    * Returns true if a string literal is emitted, false otherwise.
    */
   processChildTextElement(needsComma: boolean): boolean {
-    const token = this.tokens.currentToken();
+    const token = this.tokens.tokens[this.tokens.currentIndex()];
     const valueCode = this.tokens.code.slice(token.start, token.end);
-    const replacementCode = formatJSXTextReplacement(valueCode);
-    const literalCode = formatJSXTextLiteral(valueCode);
-    if (literalCode === '""') {
-      this.tokens.replaceToken(replacementCode);
+    const formatted = formatJSXText(valueCode);
+    if (formatted.literal === '""') {
+      this.tokens.replaceToken(formatted.replacement);
       return false;
     } else {
-      this.tokens.replaceToken(`${needsComma ? ", " : ""}${literalCode}${replacementCode}`);
+      this.tokens.replaceToken(`${needsComma ? ", " : ""}${formatted.literal}${formatted.replacement}`);
       return true;
     }
   }
@@ -517,28 +563,76 @@ export function startsWithLowerCase(s: string): boolean {
   return firstChar >= charCodes.lowercaseA && firstChar <= charCodes.lowercaseZ;
 }
 
+function startsWithLowerCaseAt(code: string, index: number): boolean {
+  const firstChar = code.charCodeAt(index);
+  return firstChar >= charCodes.lowercaseA && firstChar <= charCodes.lowercaseZ;
+}
+
+function tokenHasHyphen(code: string, token: Token): boolean {
+  for (let i = token.start; i < token.end; i++) {
+    if (code.charCodeAt(i) === charCodes.dash) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tokenMatchesCode(code: string, token: Token, expected: string): boolean {
+  const length = token.end - token.start;
+  if (length !== expected.length) {
+    return false;
+  }
+  for (let i = 0; i < length; i++) {
+    if (code.charCodeAt(token.start + i) !== expected.charCodeAt(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Turn the given jsxText string into a JS string literal. Leading and trailing
  * whitespace on lines is removed, except immediately after the open-tag and
  * before the close-tag. Empty lines are completely removed, and spaces are
  * added between lines after that.
  *
- * We use JSON.stringify to introduce escape characters as necessary, and trim
- * the start and end of each line and remove blank lines.
+ * Trim the start and end of each line and remove blank lines.
  */
-function formatJSXTextLiteral(text: string): string {
+const textFormatResult = {literal: "", replacement: ""};
+const simpleJSXValueResult = {spaceCount: 0, literal: ""};
+const whitespaceCacheLimit = 128;
+const spaceRepeatCache = [""];
+const lineFeedRepeatCache = [""];
+
+function formatJSXText(text: string): {literal: string; replacement: string} {
+  const simpleResult = analyzeSimpleJSXValue(text);
+  if (simpleResult !== null) {
+    textFormatResult.literal = simpleResult.literal;
+    textFormatResult.replacement = repeatSpaces(simpleResult.spaceCount);
+    return textFormatResult;
+  }
   let result = "";
   let whitespace = "";
+  let numNewlines = 0;
+  let numSpaces = 0;
 
   let isInInitialLineWhitespace = false;
   let seenNonWhitespace = false;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === " " || c === "\t" || c === "\r") {
+    const charCode = text.charCodeAt(i);
+    if (charCode === charCodes.lineFeed) {
+      numNewlines++;
+      numSpaces = 0;
+    } else if (charCode === charCodes.space) {
+      numSpaces++;
+    }
+    if (charCode === charCodes.space ||
+        charCode === charCodes.tab ||
+        charCode === charCodes.carriageReturn) {
       if (!isInInitialLineWhitespace) {
-        whitespace += c;
+        whitespace += text[i];
       }
-    } else if (c === "\n") {
+    } else if (charCode === charCodes.lineFeed) {
       whitespace = "";
       isInInitialLineWhitespace = true;
     } else {
@@ -547,12 +641,21 @@ function formatJSXTextLiteral(text: string): string {
       }
       result += whitespace;
       whitespace = "";
-      if (c === "&") {
-        const {entity, newI} = processEntity(text, i + 1);
-        i = newI - 1;
-        result += entity;
+      if (charCode === charCodes.ampersand) {
+        const entityInfo = processEntity(text, i + 1);
+        for (let skipped = i + 1; skipped < entityInfo.newI; skipped++) {
+          const skippedCharCode = text.charCodeAt(skipped);
+          if (skippedCharCode === charCodes.lineFeed) {
+            numNewlines++;
+            numSpaces = 0;
+          } else if (skippedCharCode === charCodes.space) {
+            numSpaces++;
+          }
+        }
+        i = entityInfo.newI - 1;
+        result += entityInfo.entity;
       } else {
-        result += c;
+        result += text[i];
       }
       seenNonWhitespace = true;
       isInInitialLineWhitespace = false;
@@ -561,26 +664,9 @@ function formatJSXTextLiteral(text: string): string {
   if (!isInInitialLineWhitespace) {
     result += whitespace;
   }
-  return JSON.stringify(result);
-}
-
-/**
- * Produce the code that should be printed after the JSX text string literal,
- * with most content removed, but all newlines preserved and all spacing at the
- * end preserved.
- */
-function formatJSXTextReplacement(text: string): string {
-  let numNewlines = 0;
-  let numSpaces = 0;
-  for (const c of text) {
-    if (c === "\n") {
-      numNewlines++;
-      numSpaces = 0;
-    } else if (c === " ") {
-      numSpaces++;
-    }
-  }
-  return "\n".repeat(numNewlines) + " ".repeat(numSpaces);
+  textFormatResult.literal = stringLiteralForJSXValue(result);
+  textFormatResult.replacement = trailingWhitespaceReplacement(numNewlines, numSpaces);
+  return textFormatResult;
 }
 
 /**
@@ -589,28 +675,152 @@ function formatJSXTextReplacement(text: string): string {
  * Use the same implementation as convertAttribute from
  * babel-helper-builder-react-jsx.
  */
-function formatJSXStringValueLiteral(text: string): string {
+function formatJSXStringValue(text: string): {literal: string; replacement: string} {
+  const simpleResult = analyzeSimpleJSXValue(text);
+  if (simpleResult !== null) {
+    textFormatResult.literal = simpleResult.literal;
+    textFormatResult.replacement = repeatSpaces(simpleResult.spaceCount);
+    return textFormatResult;
+  }
   let result = "";
+  let numNewlines = 0;
+  let numSpaces = 0;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === "\n") {
-      if (/\s/.test(text[i + 1])) {
+    const charCode = text.charCodeAt(i);
+    if (charCode === charCodes.lineFeed) {
+      numNewlines++;
+      numSpaces = 0;
+    } else if (charCode === charCodes.space) {
+      numSpaces++;
+    }
+    if (charCode === charCodes.lineFeed) {
+      if (isJSXStringWhitespace(text.charCodeAt(i + 1))) {
         result += " ";
-        while (i < text.length && /\s/.test(text[i + 1])) {
+        while (i < text.length && isJSXStringWhitespace(text.charCodeAt(i + 1))) {
           i++;
+          const skippedCharCode = text.charCodeAt(i);
+          if (skippedCharCode === charCodes.lineFeed) {
+            numNewlines++;
+            numSpaces = 0;
+          } else if (skippedCharCode === charCodes.space) {
+            numSpaces++;
+          }
         }
       } else {
         result += "\n";
       }
-    } else if (c === "&") {
-      const {entity, newI} = processEntity(text, i + 1);
-      result += entity;
-      i = newI - 1;
+    } else if (charCode === charCodes.ampersand) {
+      const entityInfo = processEntity(text, i + 1);
+      for (let skipped = i + 1; skipped < entityInfo.newI; skipped++) {
+        const skippedCharCode = text.charCodeAt(skipped);
+        if (skippedCharCode === charCodes.lineFeed) {
+          numNewlines++;
+          numSpaces = 0;
+        } else if (skippedCharCode === charCodes.space) {
+          numSpaces++;
+        }
+      }
+      result += entityInfo.entity;
+      i = entityInfo.newI - 1;
     } else {
-      result += c;
+      result += text[i];
     }
   }
-  return JSON.stringify(result);
+  textFormatResult.literal = stringLiteralForJSXValue(result);
+  textFormatResult.replacement = trailingWhitespaceReplacement(numNewlines, numSpaces);
+  return textFormatResult;
+}
+
+function trailingWhitespaceReplacement(numNewlines: number, numSpaces: number): string {
+  if (numNewlines === 0) {
+    return repeatSpaces(numSpaces);
+  }
+  if (numSpaces === 0) {
+    return repeatLineFeeds(numNewlines);
+  }
+  return repeatLineFeeds(numNewlines) + repeatSpaces(numSpaces);
+}
+
+function repeatSpaces(count: number): string {
+  return repeatCached(spaceRepeatCache, " ", count);
+}
+
+function repeatLineFeeds(count: number): string {
+  return repeatCached(lineFeedRepeatCache, "\n", count);
+}
+
+function repeatCached(cache: string[], unit: string, count: number): string {
+  if (count > whitespaceCacheLimit) {
+    return unit.repeat(count);
+  }
+  const cached = cache[count];
+  if (cached !== undefined) {
+    return cached;
+  }
+  let value = cache[cache.length - 1];
+  for (let i = cache.length; i <= count; i++) {
+    value += unit;
+    cache[i] = value;
+  }
+  return value;
+}
+
+function stringLiteralForJSXValue(value: string): string {
+  for (let i = 0; i < value.length; i++) {
+    const charCode = value.charCodeAt(i);
+    if (
+      charCode < 32 ||
+      charCode === charCodes.quotationMark ||
+      charCode === charCodes.backslash ||
+      charCode === charCodes.lineSeparator ||
+      charCode === charCodes.paragraphSeparator
+    ) {
+      return JSON.stringify(value);
+    }
+  }
+  return `"${value}"`;
+}
+
+function analyzeSimpleJSXValue(value: string): {spaceCount: number; literal: string} | null {
+  let spaceCount = 0;
+  let needsStringify = false;
+  for (let i = 0; i < value.length; i++) {
+    const charCode = value.charCodeAt(i);
+    if (charCode === charCodes.lineFeed || charCode === charCodes.ampersand) {
+      return null;
+    }
+    if (charCode === charCodes.space) {
+      spaceCount++;
+    }
+    if (
+      charCode < 32 ||
+      charCode === charCodes.quotationMark ||
+      charCode === charCodes.backslash ||
+      charCode === charCodes.lineSeparator ||
+      charCode === charCodes.paragraphSeparator
+    ) {
+      needsStringify = true;
+    }
+  }
+  simpleJSXValueResult.spaceCount = spaceCount;
+  simpleJSXValueResult.literal = needsStringify ? JSON.stringify(value) : `"${value}"`;
+  return simpleJSXValueResult;
+}
+
+function isJSXStringWhitespace(charCode: number): boolean {
+  return charCode === charCodes.lineFeed ||
+    charCode === charCodes.carriageReturn ||
+    IS_WHITESPACE[charCode] === 1;
+}
+
+function keepLineFeeds(code: string): string {
+  let lineFeedCount = 0;
+  let lineFeedIndex = code.indexOf("\n");
+  while (lineFeedIndex !== -1) {
+    lineFeedCount++;
+    lineFeedIndex = code.indexOf("\n", lineFeedIndex + 1);
+  }
+  return repeatLineFeeds(lineFeedCount);
 }
 
 /**
@@ -619,52 +829,135 @@ function formatJSXStringValueLiteral(text: string): string {
  *
  * Modified from jsxReadString in babel-parser.
  */
+const entityResult = {entity: "", newI: 0};
+
 function processEntity(text: string, indexAfterAmpersand: number): {entity: string; newI: number} {
-  let str = "";
   let count = 0;
   let entity;
   let i = indexAfterAmpersand;
 
-  if (text[i] === "#") {
-    let radix = 10;
+  if (text.charCodeAt(i) === charCodes.numberSign) {
+    let value = 0;
+    let hasDigit = false;
     i++;
-    let numStart;
-    if (text[i] === "x") {
-      radix = 16;
+    if (text.charCodeAt(i) === charCodes.lowercaseX) {
       i++;
-      numStart = i;
       while (i < text.length && isHexDigit(text.charCodeAt(i))) {
+        value = value * 16 + hexValue(text.charCodeAt(i));
+        hasDigit = true;
         i++;
       }
     } else {
-      numStart = i;
       while (i < text.length && isDecimalDigit(text.charCodeAt(i))) {
+        value = value * 10 + text.charCodeAt(i) - charCodes.digit0;
+        hasDigit = true;
         i++;
       }
     }
-    if (text[i] === ";") {
-      const numStr = text.slice(numStart, i);
-      if (numStr) {
-        i++;
-        entity = String.fromCodePoint(parseInt(numStr, radix));
-      }
+    if (hasDigit && text.charCodeAt(i) === charCodes.semicolon) {
+      i++;
+      entity = String.fromCodePoint(value);
     }
   } else {
+    if (processCommonEntity(text, indexAfterAmpersand)) {
+      return entityResult;
+    }
+    const entityStart = i;
     while (i < text.length && count++ < 10) {
-      const ch = text[i];
-      i++;
-      if (ch === ";") {
-        entity = XHTMLEntities.get(str);
+      if (text.charCodeAt(i) === charCodes.semicolon) {
+        entity = XHTMLEntities[text.slice(entityStart, i)];
+        i++;
         break;
       }
-      str += ch;
+      i++;
     }
   }
 
   if (!entity) {
-    return {entity: "&", newI: indexAfterAmpersand};
+    entityResult.entity = "&";
+    entityResult.newI = indexAfterAmpersand;
+    return entityResult;
   }
-  return {entity, newI: i};
+  entityResult.entity = entity;
+  entityResult.newI = i;
+  return entityResult;
+}
+
+function processCommonEntity(text: string, start: number): boolean {
+  switch (text.charCodeAt(start)) {
+    case charCodes.lowercaseA:
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseM &&
+        text.charCodeAt(start + 2) === charCodes.lowercaseP &&
+        text.charCodeAt(start + 3) === charCodes.semicolon
+      ) {
+        entityResult.entity = "&";
+        entityResult.newI = start + 4;
+        return true;
+      }
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseP &&
+        text.charCodeAt(start + 2) === charCodes.lowercaseO &&
+        text.charCodeAt(start + 3) === charCodes.lowercaseS &&
+        text.charCodeAt(start + 4) === charCodes.semicolon
+      ) {
+        entityResult.entity = "'";
+        entityResult.newI = start + 5;
+        return true;
+      }
+      return false;
+
+    case charCodes.lowercaseG:
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseT &&
+        text.charCodeAt(start + 2) === charCodes.semicolon
+      ) {
+        entityResult.entity = ">";
+        entityResult.newI = start + 3;
+        return true;
+      }
+      return false;
+
+    case charCodes.lowercaseL:
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseT &&
+        text.charCodeAt(start + 2) === charCodes.semicolon
+      ) {
+        entityResult.entity = "<";
+        entityResult.newI = start + 3;
+        return true;
+      }
+      return false;
+
+    case charCodes.lowercaseN:
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseB &&
+        text.charCodeAt(start + 2) === charCodes.lowercaseS &&
+        text.charCodeAt(start + 3) === charCodes.lowercaseP &&
+        text.charCodeAt(start + 4) === charCodes.semicolon
+      ) {
+        entityResult.entity = "\u00A0";
+        entityResult.newI = start + 5;
+        return true;
+      }
+      return false;
+
+    case charCodes.lowercaseQ:
+      if (
+        text.charCodeAt(start + 1) === charCodes.lowercaseU &&
+        text.charCodeAt(start + 2) === charCodes.lowercaseO &&
+        text.charCodeAt(start + 3) === charCodes.lowercaseT &&
+        text.charCodeAt(start + 4) === charCodes.semicolon
+      ) {
+        entityResult.entity = '"';
+        entityResult.newI = start + 5;
+        return true;
+      }
+      return false;
+
+    default:
+      return false;
+  }
 }
 
 function isDecimalDigit(code: number): boolean {
@@ -677,4 +970,14 @@ function isHexDigit(code: number): boolean {
     (code >= charCodes.lowercaseA && code <= charCodes.lowercaseF) ||
     (code >= charCodes.uppercaseA && code <= charCodes.uppercaseF)
   );
+}
+
+function hexValue(code: number): number {
+  if (code <= charCodes.digit9) {
+    return code - charCodes.digit0;
+  }
+  if (code <= charCodes.uppercaseF) {
+    return code - charCodes.uppercaseA + 10;
+  }
+  return code - charCodes.lowercaseA + 10;
 }

@@ -2,6 +2,9 @@ import * as pirates from "pirates";
 
 import {type Options, transform} from "./index";
 
+const crypto = import.meta.use("crypto");
+const engine = import.meta.use("engine");
+
 export interface HookOptions {
   matcher?: (code: string) => boolean;
   ignoreNodeModules?: boolean;
@@ -26,7 +29,7 @@ export function addHook(
         sourceMapOptions: {compiledFilename: filePath},
         filePath,
       });
-      const mapBase64 = Buffer.from(JSON.stringify(sourceMap)).toString("base64");
+      const mapBase64 = crypto.base64Encode(engine.encodeString(JSON.stringify(sourceMap)));
       const suffix = `//# sourceMappingURL=data:application/json;charset=utf-8;base64,${mapBase64}`;
       return `${transformedCode}\n${suffix}`;
     },

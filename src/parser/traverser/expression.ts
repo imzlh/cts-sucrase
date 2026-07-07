@@ -55,11 +55,18 @@ import {
   retokenizeSlashAsRegex,
 } from "../tokenizer/index";
 import {ContextualKeyword} from "../tokenizer/keywords";
-import {Scope} from "../tokenizer/state";
+import {appendScope} from "../tokenizer/state";
 import {TokenType, TokenType as tt} from "../tokenizer/types";
 import {charCodes} from "../util/charcodes";
 import {IS_IDENTIFIER_START} from "../util/identifier";
-import {getNextContextId, isFlowEnabled, isJSXEnabled, isTypeScriptEnabled, state} from "./base";
+import {
+  getNextContextId,
+  isFlowEnabled,
+  isJSXEnabled,
+  isTypeScriptEnabled,
+  restoreParserState,
+  state,
+} from "./base";
 import {
   markPriorBindingIdentifier,
   parseBindingIdentifier,
@@ -86,11 +93,12 @@ import {
   unexpected,
 } from "./util";
 
-export class StopState {
+export interface StopState {
   stop: boolean;
-  constructor(stop: boolean) {
-    this.stop = stop;
-  }
+}
+
+function createStopState(stop: boolean): StopState {
+  return {stop};
 }
 
 // ### Expression parsing
@@ -295,7 +303,7 @@ function parseSubscripts(startTokenIndex: number, noCalls: boolean = false): voi
 }
 
 export function baseParseSubscripts(startTokenIndex: number, noCalls: boolean = false): void {
-  const stopState = new StopState(false);
+  const stopState = createStopState(false);
   do {
     parseSubscript(startTokenIndex, noCalls, stopState);
   } while (!stopState.stop && !state.error);
@@ -351,7 +359,19 @@ export function baseParseSubscript(
     if (atPossibleAsync()) {
       // We see "async", but it's possible it's a usage of the name "async". Parse as if it's a
       // function call, and if we see an arrow later, backtrack and re-parse as a parameter list.
-      const snapshot = state.snapshot();
+      const savedPotentialArrowAt = state.potentialArrowAt;
+      const savedNoAnonFunctionType = state.noAnonFunctionType;
+      const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+      const savedTokensLength = state.tokens.length;
+      const savedScopesLength = state.scopes.length;
+      const savedPos = state.pos;
+      const savedType = state.type;
+      const savedContextualKeyword = state.contextualKeyword;
+      const savedStart = state.start;
+      const savedEnd = state.end;
+      const savedIsType = state.isType;
+      const savedScopeDepth = state.scopeDepth;
+      const savedError = state.error;
       const asyncStartTokenIndex = state.tokens.length;
       next();
       state.tokens[state.tokens.length - 1].subscriptStartIndex = startTokenIndex;
@@ -364,7 +384,21 @@ export function baseParseSubscript(
 
       if (shouldParseAsyncArrow()) {
         // We hit an arrow, so backtrack and start again parsing function parameters.
-        state.restoreFromSnapshot(snapshot);
+        restoreParserState(
+          savedPotentialArrowAt,
+          savedNoAnonFunctionType,
+          savedInDisallowConditionalTypesContext,
+          savedTokensLength,
+          savedScopesLength,
+          savedPos,
+          savedType,
+          savedContextualKeyword,
+          savedStart,
+          savedEnd,
+          savedIsType,
+          savedScopeDepth,
+          savedError,
+        );
         stopState.stop = true;
         state.scopeDepth++;
 
@@ -625,7 +659,19 @@ export function parseParenExpression(): void {
 function parseParenAndDistinguishExpression(canBeArrow: boolean): boolean {
   // Assume this is a normal parenthesized expression, but if we see an arrow, we'll bail and
   // start over as a parameter list.
-  const snapshot = state.snapshot();
+  const savedPotentialArrowAt = state.potentialArrowAt;
+  const savedNoAnonFunctionType = state.noAnonFunctionType;
+  const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const savedTokensLength = state.tokens.length;
+  const savedScopesLength = state.scopes.length;
+  const savedPos = state.pos;
+  const savedType = state.type;
+  const savedContextualKeyword = state.contextualKeyword;
+  const savedStart = state.start;
+  const savedEnd = state.end;
+  const savedIsType = state.isType;
+  const savedScopeDepth = state.scopeDepth;
+  const savedError = state.error;
 
   const startTokenIndex = state.tokens.length;
   expect(tt.parenL);
@@ -658,7 +704,21 @@ function parseParenAndDistinguishExpression(canBeArrow: boolean): boolean {
     if (wasArrow) {
       // It was an arrow function this whole time, so start over and parse it as params so that we
       // get proper token annotations.
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
       state.scopeDepth++;
       // Don't specify a context ID because arrow functions don't need a context ID.
       parseFunctionParams();
@@ -669,7 +729,21 @@ function parseParenAndDistinguishExpression(canBeArrow: boolean): boolean {
         // arrow function but where its "parameter list" isn't actually a valid
         // parameter list. Force non-arrow parsing.
         // See https://github.com/alangpierce/sucrase/issues/666 for an example.
-        state.restoreFromSnapshot(snapshot);
+        restoreParserState(
+          savedPotentialArrowAt,
+          savedNoAnonFunctionType,
+          savedInDisallowConditionalTypesContext,
+          savedTokensLength,
+          savedScopesLength,
+          savedPos,
+          savedType,
+          savedContextualKeyword,
+          savedStart,
+          savedEnd,
+          savedIsType,
+          savedScopeDepth,
+          savedError,
+        );
         parseParenAndDistinguishExpression(false);
         return false;
       }
@@ -924,7 +998,7 @@ export function parseMethod(functionStart: number, isConstructor: boolean): void
   parseFunctionParams(allowModifiers, funcContextId);
   parseFunctionBodyAndFinish(functionStart, funcContextId);
   const endTokenIndex = state.tokens.length;
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, true));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, true);
   state.scopeDepth--;
 }
 
@@ -934,7 +1008,7 @@ export function parseMethod(functionStart: number, isConstructor: boolean): void
 export function parseArrowExpression(startTokenIndex: number): void {
   parseFunctionBody(true);
   const endTokenIndex = state.tokens.length;
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, true));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, true);
   state.scopeDepth--;
 }
 

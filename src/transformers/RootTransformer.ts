@@ -1,6 +1,7 @@
 import type {HelperManager} from "../HelperManager";
-import type {Options, SucraseContext, Transform} from "../index";
+import type {Options, SucraseContext, TransformFeatureFlags} from "../index";
 import type NameManager from "../NameManager";
+import type {Token} from "../parser/tokenizer";
 import {ContextualKeyword} from "../parser/tokenizer/keywords";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
@@ -9,67 +10,72 @@ import ESMImportTransformer from "./ESMImportTransformer";
 import FlowTransformer from "./FlowTransformer";
 import JSXTransformer from "./JSXTransformer";
 import ReactDisplayNameTransformer from "./ReactDisplayNameTransformer";
-import type Transformer from "./Transformer";
 import TypeScriptTransformer from "./TypeScriptTransformer";
-import UsingTransformer from "./UsingTransformer";
 
 export interface RootTransformerResult {
   code: string;
-  mappings: Array<number | undefined>;
+  mappings: Int32Array | null;
 }
 
 export default class RootTransformer {
-  private transformers: Array<Transformer> = [];
+  private jsxTransformer: JSXTransformer | null = null;
+  private reactDisplayNameTransformer: ReactDisplayNameTransformer | null = null;
+  private typeScriptTransformer: TypeScriptTransformer | null = null;
+  private esmImportTransformer: ESMImportTransformer | null = null;
+  private flowTransformer: FlowTransformer | null = null;
   private nameManager: NameManager;
   private tokens: TokenProcessor;
-  private generatedVariables: Array<string> = [];
+  private generatedVariables: Array<string> | null = null;
   private helperManager: HelperManager;
 
   constructor(
     sucraseContext: SucraseContext,
-    transforms: Array<Transform>,
+    flags: TransformFeatureFlags,
     options: Options,
   ) {
     this.nameManager = sucraseContext.nameManager;
     this.helperManager = sucraseContext.helperManager;
     this.tokens = sucraseContext.tokenProcessor;
+    const isJSXTransformEnabled = flags.isJSXEnabled;
+    const isTypeScriptTransformEnabled = flags.isTypeScriptEnabled;
+    const isFlowTransformEnabled = flags.isFlowEnabled;
 
-    this.transformers.push(new UsingTransformer(this.tokens, this.nameManager));
-
-    if (transforms.includes("jsx")) {
+    if (isJSXTransformEnabled) {
       if (options.jsxRuntime !== "preserve") {
-        this.transformers.push(
-          new JSXTransformer(this, this.tokens, null, this.nameManager, options),
-        );
+        const jsxTransformer = new JSXTransformer(this, this.tokens, null, this.nameManager, options);
+        this.jsxTransformer = jsxTransformer;
       }
-      this.transformers.push(
-        new ReactDisplayNameTransformer(this, this.tokens, null, options),
+      const reactDisplayNameTransformer = new ReactDisplayNameTransformer(
+        this,
+        this.tokens,
+        null,
+        options,
       );
+      this.reactDisplayNameTransformer = reactDisplayNameTransformer;
     }
 
-    if (transforms.includes("typescript")) {
-      this.transformers.push(
-        new TypeScriptTransformer(this, this.tokens, false),
-      );
+    if (isTypeScriptTransformEnabled) {
+      const typeScriptTransformer = new TypeScriptTransformer(this, this.tokens, false, options);
+      this.typeScriptTransformer = typeScriptTransformer;
     }
 
-    this.transformers.push(
-      new ESMImportTransformer(
+    if (isTypeScriptTransformEnabled || isFlowTransformEnabled) {
+      const esmImportTransformer = new ESMImportTransformer(
         this.tokens,
         this.nameManager,
         this.helperManager,
         null,
-        transforms.includes("typescript"),
-        transforms.includes("flow"),
+        isTypeScriptTransformEnabled,
+        isFlowTransformEnabled,
         Boolean(options.keepUnusedImports),
         options,
-      ),
-    );
-
-    if (transforms.includes("flow")) {
-      this.transformers.push(
-        new FlowTransformer(this, this.tokens, false),
       );
+      this.esmImportTransformer = esmImportTransformer;
+    }
+
+    if (isFlowTransformEnabled) {
+      const flowTransformer = new FlowTransformer(this, this.tokens, false);
+      this.flowTransformer = flowTransformer;
     }
   }
 
@@ -77,34 +83,34 @@ export default class RootTransformer {
     this.tokens.reset();
     this.processBalancedCode();
     let prefix = "";
-    for (const transformer of this.transformers) {
-      prefix += transformer.getPrefixCode();
+    if (this.jsxTransformer !== null) {
+      prefix += this.jsxTransformer.getPrefixCode();
     }
     prefix += this.helperManager.emitHelpers();
-    prefix += this.generatedVariables.map((v) => ` var ${v};`).join("");
-    for (const transformer of this.transformers) {
-      prefix += transformer.getHoistedCode();
-    }
-    let suffix = "";
-    for (const transformer of this.transformers) {
-      suffix += transformer.getSuffixCode();
+    const generatedVariables = this.generatedVariables;
+    if (generatedVariables !== null) {
+      for (let i = 0; i < generatedVariables.length; i++) {
+        prefix += ` var ${generatedVariables[i]};`;
+      }
     }
     const result = this.tokens.finish();
     let {code} = result;
-    if (code.startsWith("#!")) {
+    if (code.length >= 2 && code.charCodeAt(0) === 35 && code.charCodeAt(1) === 33) {
       let newlineIndex = code.indexOf("\n");
       if (newlineIndex === -1) {
         newlineIndex = code.length;
         code += "\n";
       }
       return {
-        code: code.slice(0, newlineIndex + 1) + prefix + code.slice(newlineIndex + 1) + suffix,
-        mappings: this.shiftMappings(result.mappings, prefix.length),
+        code: code.slice(0, newlineIndex + 1) + prefix + code.slice(newlineIndex + 1),
+        mappings: result.mappings === null ? null : this.shiftMappings(result.mappings, prefix.length),
       };
     } else {
       return {
-        code: prefix + code + suffix,
-        mappings: this.shiftMappings(result.mappings, prefix.length),
+        code: prefix + code,
+        mappings: prefix.length === 0 || result.mappings === null
+          ? result.mappings
+          : this.shiftMappings(result.mappings, prefix.length),
       };
     }
   }
@@ -112,18 +118,20 @@ export default class RootTransformer {
   processBalancedCode(): void {
     let braceDepth = 0;
     let parenDepth = 0;
+    const tokenList = this.tokens.tokens;
     while (!this.tokens.isAtEnd()) {
-      if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL)) {
+      const tokenType = tokenList[this.tokens.currentIndex()].type;
+      if (tokenType === tt.braceL || tokenType === tt.dollarBraceL) {
         braceDepth++;
-      } else if (this.tokens.matches1(tt.braceR)) {
+      } else if (tokenType === tt.braceR) {
         if (braceDepth === 0) {
           return;
         }
         braceDepth--;
       }
-      if (this.tokens.matches1(tt.parenL)) {
+      if (tokenType === tt.parenL) {
         parenDepth++;
-      } else if (this.tokens.matches1(tt.parenR)) {
+      } else if (tokenType === tt.parenR) {
         if (parenDepth === 0) {
           return;
         }
@@ -134,24 +142,45 @@ export default class RootTransformer {
   }
 
   processToken(): void {
-    if (this.tokens.matches1(tt._class)) {
+    const tokenList = this.tokens.tokens;
+    const token = tokenList[this.tokens.currentIndex()];
+    const tokenType = token.type;
+    if (tokenType === tt._class) {
       this.processClass();
       return;
     }
-    for (const transformer of this.transformers) {
-      const wasProcessed = transformer.process();
-      if (wasProcessed) {
-        return;
-      }
+    const jsxTransformer = this.jsxTransformer;
+    if (jsxTransformer !== null && tokenType === tt.jsxTagStart) {
+      jsxTransformer.processJSXTag();
+      return;
     }
+    const reactDisplayNameTransformer = this.reactDisplayNameTransformer;
+    if (reactDisplayNameTransformer !== null &&
+        tokenType === tt.name &&
+        reactDisplayNameTransformer.process()) return;
+    const typeScriptTransformer = this.typeScriptTransformer;
+    if (typeScriptTransformer !== null &&
+        shouldTryTypeScriptTransform(token, tokenType) &&
+        typeScriptTransformer.process()) return;
+    const esmImportTransformer = this.esmImportTransformer;
+    if (esmImportTransformer !== null &&
+        (tokenType === tt._import || tokenType === tt._export) &&
+        esmImportTransformer.process()) return;
+    const flowTransformer = this.flowTransformer;
+    if (flowTransformer !== null &&
+        shouldTryFlowTransform(token, tokenType) &&
+        flowTransformer.process()) return;
     this.tokens.copyToken();
   }
 
   processNamedClass(): string {
-    if (!this.tokens.matches2(tt._class, tt.name)) {
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    const nameToken = tokenList[tokenIndex + 1];
+    if (tokenList[tokenIndex].type !== tt._class || nameToken.type !== tt.name) {
       throw new Error("Expected identifier for exported class name.");
     }
-    const name = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 1);
+    const name = this.tokens.identifierNameForToken(nameToken);
     this.processClass();
     return name;
   }
@@ -166,31 +195,39 @@ export default class RootTransformer {
     let className = classInfo.headerInfo.className;
     if (needsCommaExpression) {
       className = this.nameManager.claimFreeName("_class");
-      this.generatedVariables.push(className);
+      const generatedVariables = this.generatedVariables ??= [];
+      generatedVariables[generatedVariables.length] = className;
       this.tokens.appendCode(` (${className} =`);
     }
 
-    const classToken = this.tokens.currentToken();
+    const tokenList = this.tokens.tokens;
+    const classToken = tokenList[this.tokens.currentIndex()];
     const contextId = classToken.contextId;
     if (contextId == null) {
       throw new Error("Expected class to have a context ID.");
     }
     this.tokens.copyExpectedToken(tt._class);
-    while (!this.tokens.matchesContextIdAndLabel(tt.braceL, contextId)) {
+    while (tokenList[this.tokens.currentIndex()].type !== tt.braceL ||
+           tokenList[this.tokens.currentIndex()].contextId !== contextId) {
       this.processToken();
     }
 
     this.processClassBody(classInfo, className);
 
-    const staticInitializerStatements = classInfo.staticInitializerNames.map(
-      (name) => `${className!}.${name}()`,
-    );
     if (needsCommaExpression) {
+      let staticInitializerCode = "";
+      for (let i = 0; i < classInfo.staticInitializerNames.length; i++) {
+        staticInitializerCode += `${className!}.${classInfo.staticInitializerNames[i]}(), `;
+      }
       this.tokens.appendCode(
-        `, ${staticInitializerStatements.map((s) => `${s}, `).join("")}${className!})`,
+        `, ${staticInitializerCode}${className!})`,
       );
     } else if (classInfo.staticInitializerNames.length > 0) {
-      this.tokens.appendCode(` ${staticInitializerStatements.map((s) => `${s};`).join(" ")}`);
+      let staticInitializerCode = " ";
+      for (let i = 0; i < classInfo.staticInitializerNames.length; i++) {
+        staticInitializerCode += `${className!}.${classInfo.staticInitializerNames[i]}(); `;
+      }
+      this.tokens.appendCode(staticInitializerCode);
     }
   }
 
@@ -205,7 +242,8 @@ export default class RootTransformer {
     } = classInfo;
     let fieldIndex = 0;
     let rangeToRemoveIndex = 0;
-    const classContextId = this.tokens.currentToken().contextId;
+    const tokenList = this.tokens.tokens;
+    const classContextId = tokenList[this.tokens.currentIndex()].contextId;
     if (classContextId == null) {
       throw new Error("Expected non-null context ID on class.");
     }
@@ -230,12 +268,14 @@ export default class RootTransformer {
       }
     }
 
-    while (!this.tokens.matchesContextIdAndLabel(tt.braceR, classContextId)) {
+    while (tokenList[this.tokens.currentIndex()].type !== tt.braceR ||
+           tokenList[this.tokens.currentIndex()].contextId !== classContextId) {
       if (fieldIndex < fields.length && this.tokens.currentIndex() === fields[fieldIndex].start) {
         let needsCloseBrace = false;
-        if (this.tokens.matches1(tt.bracketL)) {
+        const tokenType = tokenList[this.tokens.currentIndex()].type;
+        if (tokenType === tt.bracketL) {
           this.tokens.copyTokenWithPrefix(`${fields[fieldIndex].initializerName}() {this`);
-        } else if (this.tokens.matches1(tt.string) || this.tokens.matches1(tt.num)) {
+        } else if (tokenType === tt.string || tokenType === tt.num) {
           this.tokens.copyTokenWithPrefix(`${fields[fieldIndex].initializerName}() {this[`);
           needsCloseBrace = true;
         } else {
@@ -284,19 +324,33 @@ export default class RootTransformer {
     instanceInitializerNames: Array<string>,
     className: string,
   ): string {
-    return [
-      ...constructorInitializerStatements,
-      ...instanceInitializerNames.map((name) => `${className}.prototype.${name}.call(this)`),
-    ].join(";");
+    let result = "";
+    for (let i = 0; i < constructorInitializerStatements.length; i++) {
+      if (result) {
+        result += ";";
+      }
+      result += constructorInitializerStatements[i];
+    }
+    for (let i = 0; i < instanceInitializerNames.length; i++) {
+      if (result) {
+        result += ";";
+      }
+      result += `${className}.prototype.${instanceInitializerNames[i]}.call(this)`;
+    }
+    return result;
   }
 
   processPossibleArrowParamEnd(): boolean {
-    if (this.tokens.matches2(tt.parenR, tt.colon) && this.tokens.tokenAtRelativeIndex(1).isType) {
-      let nextNonTypeIndex = this.tokens.currentIndex() + 1;
-      while (this.tokens.tokens[nextNonTypeIndex].isType) {
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    if (tokenList[tokenIndex].type === tt.parenR &&
+        tokenList[tokenIndex + 1].type === tt.colon &&
+        tokenList[tokenIndex + 1].isType) {
+      let nextNonTypeIndex = tokenIndex + 1;
+      while (tokenList[nextNonTypeIndex].isType) {
         nextNonTypeIndex++;
       }
-      if (this.tokens.matches1AtIndex(nextNonTypeIndex, tt.arrow)) {
+      if (tokenList[nextNonTypeIndex].type === tt.arrow) {
         this.tokens.removeInitialToken();
         while (this.tokens.currentIndex() < nextNonTypeIndex) {
           this.tokens.removeToken();
@@ -309,22 +363,23 @@ export default class RootTransformer {
   }
 
   processPossibleAsyncArrowWithTypeParams(): boolean {
-    if (
-      !this.tokens.matchesContextual(ContextualKeyword._async) &&
-      !this.tokens.matches1(tt._async)
-    ) {
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    const token = tokenList[tokenIndex];
+    if (token.type !== tt._async &&
+        !(token.type === tt.name && token.contextualKeyword === ContextualKeyword._async)) {
       return false;
     }
-    const nextToken = this.tokens.tokenAtRelativeIndex(1);
+    const nextToken = tokenList[tokenIndex + 1];
     if (nextToken.type !== tt.lessThan || !nextToken.isType) {
       return false;
     }
 
-    let nextNonTypeIndex = this.tokens.currentIndex() + 1;
-    while (this.tokens.tokens[nextNonTypeIndex].isType) {
+    let nextNonTypeIndex = tokenIndex + 1;
+    while (tokenList[nextNonTypeIndex].isType) {
       nextNonTypeIndex++;
     }
-    if (this.tokens.matches1AtIndex(nextNonTypeIndex, tt.parenL)) {
+    if (tokenList[nextNonTypeIndex].type === tt.parenL) {
       this.tokens.replaceToken("async (");
       this.tokens.removeInitialToken();
       while (this.tokens.currentIndex() < nextNonTypeIndex) {
@@ -339,9 +394,10 @@ export default class RootTransformer {
   }
 
   processPossibleTypeRange(): boolean {
-    if (this.tokens.currentToken().isType) {
+    const tokenList = this.tokens.tokens;
+    if (tokenList[this.tokens.currentIndex()].isType) {
       this.tokens.removeInitialToken();
-      while (this.tokens.currentToken().isType) {
+      while (tokenList[this.tokens.currentIndex()].isType) {
         this.tokens.removeToken();
       }
       return true;
@@ -350,15 +406,62 @@ export default class RootTransformer {
   }
 
   shiftMappings(
-    mappings: Array<number | undefined>,
+    mappings: Int32Array,
     prefixLength: number,
-  ): Array<number | undefined> {
+  ): Int32Array {
     for (let i = 0; i < mappings.length; i++) {
       const mapping = mappings[i];
-      if (mapping !== undefined) {
+      if (mapping !== 0) {
         mappings[i] = mapping + prefixLength;
       }
     }
     return mappings;
+  }
+}
+
+function shouldTryTypeScriptTransform(token: Token, tokenType: tt): boolean {
+  if (token.isType) {
+    return true;
+  }
+  switch (tokenType) {
+    case tt._export:
+    case tt.parenR:
+    case tt._async:
+    case tt._public:
+    case tt._protected:
+    case tt._private:
+    case tt._abstract:
+    case tt._readonly:
+    case tt._override:
+    case tt.nonNullAssertion:
+    case tt._enum:
+    case tt._const:
+      return true;
+
+    case tt.name:
+      return token.contextualKeyword === ContextualKeyword._interface ||
+        token.contextualKeyword === ContextualKeyword._async;
+
+    default:
+      return false;
+  }
+}
+
+function shouldTryFlowTransform(token: Token, tokenType: tt): boolean {
+  if (token.isType) {
+    return true;
+  }
+  switch (tokenType) {
+    case tt.parenR:
+    case tt._async:
+    case tt._enum:
+    case tt._export:
+      return true;
+
+    case tt.name:
+      return token.contextualKeyword === ContextualKeyword._async;
+
+    default:
+      return false;
   }
 }

@@ -1,8 +1,12 @@
 import {eat, finishToken, lookaheadTypeAndKeyword, match, nextTokenStart} from "../tokenizer/index";
 import type {ContextualKeyword} from "../tokenizer/keywords";
 import {formatTokenType, type TokenType, TokenType as tt} from "../tokenizer/types";
-import {charCodes} from "../util/charcodes";
 import {input, state} from "./base";
+
+const LINE_FEED = "\n";
+const CARRIAGE_RETURN = "\r";
+const LINE_SEPARATOR = "\u2028";
+const PARAGRAPH_SEPARATOR = "\u2029";
 
 // ## Parser utilities
 
@@ -36,34 +40,22 @@ export function canInsertSemicolon(): boolean {
 export function hasPrecedingLineBreak(): boolean {
   const prevToken = state.tokens[state.tokens.length - 1];
   const lastTokEnd = prevToken ? prevToken.end : 0;
-  for (let i = lastTokEnd; i < state.start; i++) {
-    const code = input.charCodeAt(i);
-    if (
-      code === charCodes.lineFeed ||
-      code === charCodes.carriageReturn ||
-      code === 0x2028 ||
-      code === 0x2029
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return hasLineBreakBetween(lastTokEnd, state.start);
 }
 
 export function hasFollowingLineBreak(): boolean {
-  const nextStart = nextTokenStart();
-  for (let i = state.end; i < nextStart; i++) {
-    const code = input.charCodeAt(i);
-    if (
-      code === charCodes.lineFeed ||
-      code === charCodes.carriageReturn ||
-      code === 0x2028 ||
-      code === 0x2029
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return hasLineBreakBetween(state.end, nextTokenStart());
+}
+
+function hasLineBreakBetween(start: number, end: number): boolean {
+  let index = input.indexOf(LINE_FEED, start);
+  if (index !== -1 && index < end) return true;
+  index = input.indexOf(CARRIAGE_RETURN, start);
+  if (index !== -1 && index < end) return true;
+  index = input.indexOf(LINE_SEPARATOR, start);
+  if (index !== -1 && index < end) return true;
+  index = input.indexOf(PARAGRAPH_SEPARATOR, start);
+  return index !== -1 && index < end;
 }
 
 export function isLineTerminator(): boolean {

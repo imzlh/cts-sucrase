@@ -23,6 +23,7 @@ export const Options = t.iface([], {
   jsxPragma: t.opt("string"),
   jsxFragmentPragma: t.opt("string"),
   keepUnusedImports: t.opt("boolean"),
+  preserveImportAttributes: t.opt("boolean"),
   sourceMapOptions: t.opt("SourceMapOptions"),
   filePath: t.opt("string"),
 });

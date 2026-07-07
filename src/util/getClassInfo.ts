@@ -41,6 +41,10 @@ export interface ClassInfo {
   rangesToRemove: Array<TokenRange>;
 }
 
+const EMPTY_STRINGS: Array<string> = [];
+const EMPTY_FIELDS: Array<FieldInfo> = [];
+const EMPTY_RANGES: Array<TokenRange> = [];
+
 /**
  * Get information about the class fields for this class, given a token processor pointing to the
  * open-brace at the start of the class.
@@ -51,32 +55,41 @@ export default function getClassInfo(
   nameManager: NameManager,
   disableESTransforms: boolean,
 ): ClassInfo {
-  const snapshot = tokens.snapshot();
+  const savedResultCodeLength = tokens.currentResultCodeLength();
+  const savedTokenIndex = tokens.currentIndex();
 
   const headerInfo = processClassHeader(tokens);
 
-  let constructorInitializerStatements: Array<string> = [];
-  const instanceInitializerNames: Array<string> = [];
-  const staticInitializerNames: Array<string> = [];
+  let constructorInitializerStatements: Array<string> = EMPTY_STRINGS;
+  const instanceInitializerNames: Array<string> = disableESTransforms ? EMPTY_STRINGS : [];
+  const staticInitializerNames: Array<string> = disableESTransforms ? EMPTY_STRINGS : [];
   let constructorInsertPos = null;
-  const fields: Array<FieldInfo> = [];
-  const rangesToRemove: Array<TokenRange> = [];
+  const fields: Array<FieldInfo> = disableESTransforms ? EMPTY_FIELDS : [];
+  let rangesToRemove: Array<TokenRange> | null = null;
 
-  const classContextId = tokens.currentToken().contextId;
+  const tokenList = tokens.tokens;
+  const classContextId = tokenList[tokens.currentIndex()].contextId;
   if (classContextId == null) {
     throw new Error("Expected non-null class context ID on class open-brace.");
   }
 
   tokens.nextToken();
-  while (!tokens.matchesContextIdAndLabel(tt.braceR, classContextId)) {
-    if (tokens.matchesContextual(ContextualKeyword._constructor) && !tokens.currentToken().isType) {
+  while (tokenList[tokens.currentIndex()].type !== tt.braceR ||
+         tokenList[tokens.currentIndex()].contextId !== classContextId) {
+    const currentToken = tokenList[tokens.currentIndex()];
+    if (
+      currentToken.type === tt.name &&
+      currentToken.contextualKeyword === ContextualKeyword._constructor &&
+      !currentToken.isType
+    ) {
       ({constructorInitializerStatements, constructorInsertPos} = processConstructor(tokens));
-    } else if (tokens.matches1(tt.semi)) {
+    } else if (currentToken.type === tt.semi) {
       if (!disableESTransforms) {
-        rangesToRemove.push({start: tokens.currentIndex(), end: tokens.currentIndex() + 1});
+        const ranges = rangesToRemove ??= [];
+        ranges[ranges.length] = {start: tokens.currentIndex(), end: tokens.currentIndex() + 1};
       }
       tokens.nextToken();
-    } else if (tokens.currentToken().isType) {
+    } else if (currentToken.isType) {
       tokens.nextToken();
     } else {
       // Either a method or a field. Skip to the identifier part.
@@ -84,19 +97,22 @@ export default function getClassInfo(
       let isStatic = false;
       let isESPrivate = false;
       let isDeclareOrAbstract = false;
-      while (isAccessModifier(tokens.currentToken())) {
-        if (tokens.matches1(tt._static)) {
+      let token = tokenList[tokens.currentIndex()];
+      while (isAccessModifier(token)) {
+        const tokenType = token.type;
+        if (tokenType === tt._static) {
           isStatic = true;
         }
-        if (tokens.matches1(tt.hash)) {
+        if (tokenType === tt.hash) {
           isESPrivate = true;
         }
-        if (tokens.matches1(tt._declare) || tokens.matches1(tt._abstract)) {
+        if (tokenType === tt._declare || tokenType === tt._abstract) {
           isDeclareOrAbstract = true;
         }
         tokens.nextToken();
+        token = tokenList[tokens.currentIndex()];
       }
-      if (isStatic && tokens.matches1(tt.braceL)) {
+      if (isStatic && token.type === tt.braceL) {
         // This is a static block, so don't process it in any special way.
         skipToNextClassElement(tokens, classContextId);
         continue;
@@ -107,80 +123,96 @@ export default function getClassInfo(
         continue;
       }
       if (
-        tokens.matchesContextual(ContextualKeyword._constructor) &&
-        !tokens.currentToken().isType
+        token.type === tt.name &&
+        token.contextualKeyword === ContextualKeyword._constructor &&
+        !token.isType
       ) {
         ({constructorInitializerStatements, constructorInsertPos} = processConstructor(tokens));
         continue;
       }
 
+      if (
+        token.type === tt.name &&
+        token.contextualKeyword === ContextualKeyword._accessor &&
+        !token.isType
+      ) {
+        if (!isDeclareOrAbstract) {
+          const ranges = rangesToRemove ??= [];
+          ranges[ranges.length] = {start: tokens.currentIndex(), end: tokens.currentIndex() + 1};
+        }
+        tokens.nextToken();
+      }
+
       const nameStartIndex = tokens.currentIndex();
       skipFieldName(tokens);
-      if (tokens.matches1(tt.lessThan) || tokens.matches1(tt.parenL)) {
+      let tokenType = tokenList[tokens.currentIndex()].type;
+      if (tokenType === tt.lessThan || tokenType === tt.parenL) {
         // This is a method, so nothing to process.
         skipToNextClassElement(tokens, classContextId);
         continue;
       }
       // `field!` definite assignment assertion - purely TS, counts as declare-like
-      const hasNonNull = tokens.matches1(tt.nonNullAssertion);
+      const hasNonNull = tokenType === tt.nonNullAssertion;
       if (hasNonNull) tokens.nextToken();
       // There might be a type annotation that we need to skip.
-      while (tokens.currentToken().isType) {
+      while (tokenList[tokens.currentIndex()].isType) {
         tokens.nextToken();
       }
-      if (tokens.matches1(tt.eq)) {
+      const fieldToken = tokenList[tokens.currentIndex()];
+      if (fieldToken.type === tt.eq) {
         const equalsIndex = tokens.currentIndex();
         // This is an initializer, so we need to wrap in an initializer method.
-        const valueEnd = tokens.currentToken().rhsEndIndex;
+        const valueEnd = fieldToken.rhsEndIndex;
         if (valueEnd == null) {
           throw new Error("Expected rhsEndIndex on class field assignment.");
         }
         tokens.nextToken();
+        if (disableESTransforms) {
+          while (tokens.currentIndex() < valueEnd) {
+            tokens.nextToken();
+          }
+          continue;
+        }
         while (tokens.currentIndex() < valueEnd) {
           rootTransformer.processToken();
         }
         let initializerName;
         if (isStatic) {
           initializerName = nameManager.claimFreeName("__initStatic");
-          staticInitializerNames.push(initializerName);
+          staticInitializerNames[staticInitializerNames.length] = initializerName;
         } else {
           initializerName = nameManager.claimFreeName("__init");
-          instanceInitializerNames.push(initializerName);
+          instanceInitializerNames[instanceInitializerNames.length] = initializerName;
         }
         // Fields start at the name, so `static x = 1;` has a field range of `x = 1;`.
-        fields.push({
+        fields[fields.length] = {
           initializerName,
           equalsIndex,
           start: nameStartIndex,
           end: tokens.currentIndex(),
-        });
+        };
       } else {
-        // This is a regular field declaration, like `x;`. We should remove the line to avoid
-        // invalid JavaScript syntax. TypeScript class property declarations without initializers
-        // should be removed entirely from the output.
-        rangesToRemove.push({start: statementStartIndex, end: tokens.currentIndex()});
+        // Plain class fields are native syntax in our runtime when ES transforms are disabled.
+        if (!disableESTransforms || isDeclareOrAbstract) {
+          const ranges = rangesToRemove ??= [];
+          ranges[ranges.length] = {start: statementStartIndex, end: tokens.currentIndex()};
+        }
       }
     }
   }
 
-  tokens.restoreToSnapshot(snapshot);
+  tokens.restoreToState(savedResultCodeLength, savedTokenIndex);
   if (disableESTransforms) {
-    // With ES transforms disabled, we don't want to transform regular class
-    // field declarations, and we don't need to do any additional tricks to
-    // reference the constructor for static init, but we still need to transform
-    // TypeScript field initializers defined as constructor parameters and we
-    // still need to remove `declare` fields. For now, we run the same code
-    // path but omit any field information, as if the class had no field
-    // declarations. In the future, when we fully drop the class fields
-    // transform, we can simplify this code significantly.
+    // With ES transforms disabled, preserve native class fields and only remove
+    // TypeScript-only declare/abstract members.
     return {
       headerInfo,
       constructorInitializerStatements,
-      instanceInitializerNames: [],
-      staticInitializerNames: [],
+      instanceInitializerNames: EMPTY_STRINGS,
+      staticInitializerNames: EMPTY_STRINGS,
       constructorInsertPos,
-      fields: [],
-      rangesToRemove,
+      fields: EMPTY_FIELDS,
+      rangesToRemove: rangesToRemove ?? EMPTY_RANGES,
     };
   } else {
     return {
@@ -190,7 +222,7 @@ export default function getClassInfo(
       staticInitializerNames,
       constructorInsertPos,
       fields,
-      rangesToRemove,
+      rangesToRemove: rangesToRemove ?? EMPTY_RANGES,
     };
   }
 }
@@ -203,17 +235,19 @@ export default function getClassInfo(
  * include any access modifiers.
  */
 function skipToNextClassElement(tokens: TokenProcessor, classContextId: number): void {
+  const tokenList = tokens.tokens;
   tokens.nextToken();
-  while (tokens.currentToken().contextId !== classContextId) {
+  while (tokenList[tokens.currentIndex()].contextId !== classContextId) {
     tokens.nextToken();
   }
-  while (isAccessModifier(tokens.tokenAtRelativeIndex(-1))) {
+  while (isAccessModifier(tokenList[tokens.currentIndex() - 1])) {
     tokens.previousToken();
   }
 }
 
 function processClassHeader(tokens: TokenProcessor): ClassHeaderInfo {
-  const classToken = tokens.currentToken();
+  const tokenList = tokens.tokens;
+  const classToken = tokenList[tokens.currentIndex()];
   const contextId = classToken.contextId;
   if (contextId == null) {
     throw new Error("Expected context ID on class token.");
@@ -225,18 +259,20 @@ function processClassHeader(tokens: TokenProcessor): ClassHeaderInfo {
   let className = null;
   let hasSuperclass = false;
   tokens.nextToken();
-  if (tokens.matches1(tt.name)) {
-    className = tokens.identifierName();
+  let token = tokenList[tokens.currentIndex()];
+  if (token.type === tt.name) {
+    className = tokens.identifierNameForToken(token);
   }
-  while (!tokens.matchesContextIdAndLabel(tt.braceL, contextId)) {
+  while (token.type !== tt.braceL || token.contextId !== contextId) {
     // If this has a superclass, there will always be an `extends` token. If it doesn't have a
     // superclass, only type parameters and `implements` clauses can show up here, all of which
     // consist only of type tokens. A declaration like `class A<B extends C> {` should *not* count
     // as having a superclass.
-    if (tokens.matches1(tt._extends) && !tokens.currentToken().isType) {
+    if (token.type === tt._extends && !token.isType) {
       hasSuperclass = true;
     }
     tokens.nextToken();
+    token = tokenList[tokens.currentIndex()];
   }
   return {isExpression, className, hasSuperclass};
 }
@@ -248,30 +284,38 @@ function processConstructor(tokens: TokenProcessor): {
   constructorInitializerStatements: Array<string>;
   constructorInsertPos: number;
 } {
-  const constructorInitializerStatements = [];
+  let constructorInitializerStatements: Array<string> = EMPTY_STRINGS;
+  const tokenList = tokens.tokens;
 
   tokens.nextToken();
-  const constructorContextId = tokens.currentToken().contextId;
+  const constructorContextId = tokenList[tokens.currentIndex()].contextId;
   if (constructorContextId == null) {
     throw new Error("Expected context ID on open-paren starting constructor params.");
   }
   // Advance through parameters looking for access modifiers.
-  while (!tokens.matchesContextIdAndLabel(tt.parenR, constructorContextId)) {
-    if (tokens.currentToken().contextId === constructorContextId) {
+  while (tokenList[tokens.currentIndex()].type !== tt.parenR ||
+         tokenList[tokens.currentIndex()].contextId !== constructorContextId) {
+    let token = tokenList[tokens.currentIndex()];
+    if (token.contextId === constructorContextId) {
       // Current token is an open paren or comma just before a param, so check
       // that param for access modifiers.
       tokens.nextToken();
-      if (isAccessModifier(tokens.currentToken())) {
+      token = tokenList[tokens.currentIndex()];
+      if (isAccessModifier(token)) {
         tokens.nextToken();
-        while (isAccessModifier(tokens.currentToken())) {
+        token = tokenList[tokens.currentIndex()];
+        while (isAccessModifier(token)) {
           tokens.nextToken();
+          token = tokenList[tokens.currentIndex()];
         }
-        const token = tokens.currentToken();
         if (token.type !== tt.name) {
           throw new Error("Expected identifier after access modifiers in constructor arg.");
         }
         const name = tokens.identifierNameForToken(token);
-        constructorInitializerStatements.push(`this.${name} = ${name}`);
+        if (constructorInitializerStatements === EMPTY_STRINGS) {
+          constructorInitializerStatements = [];
+        }
+        constructorInitializerStatements[constructorInitializerStatements.length] = `this.${name} = ${name}`;
       }
     } else {
       tokens.nextToken();
@@ -281,21 +325,28 @@ function processConstructor(tokens: TokenProcessor): {
   tokens.nextToken();
   // Constructor type annotations are invalid, but skip them anyway since
   // they're easy to skip.
-  while (tokens.currentToken().isType) {
+  while (tokenList[tokens.currentIndex()].isType) {
     tokens.nextToken();
   }
   let constructorInsertPos = tokens.currentIndex();
 
   // Advance through body looking for a super call.
   let foundSuperCall = false;
-  while (!tokens.matchesContextIdAndLabel(tt.braceR, constructorContextId)) {
-    if (!foundSuperCall && tokens.matches2(tt._super, tt.parenL)) {
+  while (tokenList[tokens.currentIndex()].type !== tt.braceR ||
+         tokenList[tokens.currentIndex()].contextId !== constructorContextId) {
+    const tokenIndex = tokens.currentIndex();
+    if (
+      !foundSuperCall &&
+      tokenList[tokenIndex].type === tt._super &&
+      tokenList[tokenIndex + 1].type === tt.parenL
+    ) {
       tokens.nextToken();
-      const superCallContextId = tokens.currentToken().contextId;
+      const superCallContextId = tokenList[tokens.currentIndex()].contextId;
       if (superCallContextId == null) {
         throw new Error("Expected a context ID on the super call");
       }
-      while (!tokens.matchesContextIdAndLabel(tt.parenR, superCallContextId)) {
+      while (tokenList[tokens.currentIndex()].type !== tt.parenR ||
+             tokenList[tokens.currentIndex()].contextId !== superCallContextId) {
         tokens.nextToken();
       }
       constructorInsertPos = tokens.currentIndex();
@@ -313,23 +364,26 @@ function processConstructor(tokens: TokenProcessor): {
  * Determine if this is any token that can go before the name in a method/field.
  */
 function isAccessModifier(token: Token): boolean {
-  return [
-    tt._async,
-    tt._get,
-    tt._set,
-    tt.plus,
-    tt.minus,
-    tt._readonly,
-    tt._static,
-    tt._public,
-    tt._private,
-    tt._protected,
-    tt._override,
-    tt._abstract,
-    tt.star,
-    tt._declare,
-    tt.hash,
-  ].includes(token.type);
+  switch (token.type) {
+    case tt._async:
+    case tt._get:
+    case tt._set:
+    case tt.plus:
+    case tt.minus:
+    case tt._readonly:
+    case tt._static:
+    case tt._public:
+    case tt._private:
+    case tt._protected:
+    case tt._override:
+    case tt._abstract:
+    case tt.star:
+    case tt._declare:
+    case tt.hash:
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -337,13 +391,15 @@ function isAccessModifier(token: Token): boolean {
  * a method or field name.
  */
 function skipFieldName(tokens: TokenProcessor): void {
-  if (tokens.matches1(tt.bracketL)) {
-    const startToken = tokens.currentToken();
+  const tokenList = tokens.tokens;
+  const startToken = tokenList[tokens.currentIndex()];
+  if (startToken.type === tt.bracketL) {
     const classContextId = startToken.contextId;
     if (classContextId == null) {
       throw new Error("Expected class context ID on computed name open bracket.");
     }
-    while (!tokens.matchesContextIdAndLabel(tt.bracketR, classContextId)) {
+    while (tokenList[tokens.currentIndex()].type !== tt.bracketR ||
+           tokenList[tokens.currentIndex()].contextId !== classContextId) {
       tokens.nextToken();
     }
     tokens.nextToken();

@@ -1,20 +1,21 @@
 {
   "compilerOptions": {
     "strict": true,
-    "target": "es2020",
-    "module": "commonjs",
+    "target": "esnext",
+    "module": "esnext",
     "isolatedModules": true,
     "esModuleInterop": true,
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true,
     "useDefineForClassFields": true,
-    "lib": ["es2020", "dom"],
+    "lib": ["esnext", "dom"],
     "outDir": "../dist",
     "rootDir": ".",
     "declaration": true,
     "skipLibCheck": true
   },
   "include": [
-    "."
+    ".",
+    "circu-types"
   ]
 }

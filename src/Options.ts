@@ -19,6 +19,7 @@ export interface Options {
   jsxPragma?: string;
   jsxFragmentPragma?: string;
   keepUnusedImports?: boolean;
+  preserveImportAttributes?: boolean;
   sourceMapOptions?: SourceMapOptions;
   filePath?: string;
 }

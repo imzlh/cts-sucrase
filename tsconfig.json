@@ -3,14 +3,15 @@
     // We never emit JS code (only type declarations) from TSC, so ignore those
     // options.
     "strict": true,
-    "target": "es2020",
-    "module": "commonjs",
+    "target": "esnext",
+    "module": "esnext",
     "isolatedModules": true,
     "esModuleInterop": true,
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true,
     "useDefineForClassFields": true,
-    "lib": ["es2020", "dom"]
+    "skipLibCheck": true,
+    "lib": ["esnext", "dom"]
   },
   "include": [
     "benchmark",
@@ -20,6 +21,7 @@
     "script",
     "spec-compliance-tests",
     "src",
+    "src/circu-types",
     "test",
   ],
   "exclude": [

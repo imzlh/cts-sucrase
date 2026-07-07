@@ -13,9 +13,10 @@ import type TokenProcessor from "../TokenProcessor";
 export default function isAsyncOperation(tokens: TokenProcessor): boolean {
   let index = tokens.currentIndex();
   let depth = 0;
-  const startToken = tokens.currentToken();
+  const tokenList = tokens.tokens;
+  const startToken = tokenList[index];
   do {
-    const token = tokens.tokens[index];
+    const token = tokenList[index];
     if (token.isOptionalChainStart) {
       depth++;
     }
@@ -33,6 +34,6 @@ export default function isAsyncOperation(tokens: TokenProcessor): boolean {
       return true;
     }
     index += 1;
-  } while (depth > 0 && index < tokens.tokens.length);
+  } while (depth > 0 && index < tokenList.length);
   return false;
 }

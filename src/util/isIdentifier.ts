@@ -6,57 +6,38 @@ import {IS_IDENTIFIER_CHAR, IS_IDENTIFIER_START} from "../parser/util/identifier
 // but unused and various contextual keywords being reserved. Note that we assume that all code
 // compiled by Sucrase is in a module, so strict mode words and await are all considered reserved
 // here.
-const RESERVED_WORDS = new Set([
-  // Reserved keywords as of ECMAScript 2015
-  "break",
-  "case",
-  "catch",
-  "class",
-  "const",
-  "continue",
-  "debugger",
-  "default",
-  "delete",
-  "do",
-  "else",
-  "export",
-  "extends",
-  "finally",
-  "for",
-  "function",
-  "if",
-  "import",
-  "in",
-  "instanceof",
-  "new",
-  "return",
-  "super",
-  "switch",
-  "this",
-  "throw",
-  "try",
-  "typeof",
-  "var",
-  "void",
-  "while",
-  "with",
-  "yield",
-  // Future reserved keywords
-  "enum",
-  "implements",
-  "interface",
-  "let",
-  "package",
-  "private",
-  "protected",
-  "public",
-  "static",
-  "await",
-  // Literals that cannot be used as identifiers
-  "false",
-  "null",
-  "true",
-]);
+function isReservedWord(name: string): boolean {
+  switch (name.length) {
+    case 2:
+      return name === "do" || name === "if" || name === "in";
+    case 3:
+      return name === "for" || name === "let" || name === "new" ||
+        name === "try" || name === "var";
+    case 4:
+      return name === "case" || name === "else" || name === "enum" ||
+        name === "null" || name === "this" || name === "true" ||
+        name === "void" || name === "with";
+    case 5:
+      return name === "await" || name === "break" || name === "catch" ||
+        name === "class" || name === "const" || name === "false" ||
+        name === "super" || name === "throw" || name === "while" ||
+        name === "yield";
+    case 6:
+      return name === "delete" || name === "export" || name === "import" ||
+        name === "public" || name === "return" || name === "static" ||
+        name === "switch" || name === "typeof";
+    case 7:
+      return name === "default" || name === "extends" || name === "finally" ||
+        name === "package" || name === "private";
+    case 8:
+      return name === "continue" || name === "debugger" || name === "function";
+    case 9:
+      return name === "interface" || name === "protected";
+    case 10:
+      return name === "implements" || name === "instanceof";
+  }
+  return false;
+}
 
 /**
  * Determine if the given name is a legal variable name.
@@ -77,5 +58,5 @@ export default function isIdentifier(name: string): boolean {
       return false;
     }
   }
-  return !RESERVED_WORDS.has(name);
+  return !isReservedWord(name);
 }

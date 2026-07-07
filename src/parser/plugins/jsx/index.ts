@@ -1,4 +1,5 @@
 import {
+  appendToken,
   eat,
   finishToken,
   getTokenFromCode,
@@ -7,7 +8,6 @@ import {
   match,
   next,
   skipSpace,
-  Token,
 } from "../../tokenizer/index";
 import {TokenType as tt} from "../../tokenizer/types";
 import {input, isTypeScriptEnabled, state} from "../../traverser/base";
@@ -16,6 +16,11 @@ import {expect, unexpected} from "../../traverser/util";
 import {charCodes} from "../../util/charcodes";
 import {IS_IDENTIFIER_CHAR, IS_IDENTIFIER_START} from "../../util/identifier";
 import {tsTryParseJSXTypeArgument} from "../typescript";
+
+const APOSTROPHE = "'";
+const QUOTATION_MARK = "\"";
+const JSX_TAG_START = "<";
+const JSX_EXPR_START = "{";
 
 /**
  * Read token with JSX contents.
@@ -34,60 +39,76 @@ import {tsTryParseJSXTypeArgument} from "../typescript";
  * This can be proven by analyzing any implementation of whitespace trimming,
  * e.g. formatJSXTextLiteral in Sucrase or cleanJSXElementLiteralChild in Babel.
  */
+let jsxTextHasNewline = false;
+let jsxTextOnlyWhitespace = true;
+
 function jsxReadToken(): void {
-  let sawNewline = false;
-  let sawNonWhitespace = false;
-  while (true) {
-    if (state.pos >= input.length) {
-      unexpected("Unterminated JSX contents");
+  const textEnd = scanJSXTextSpecialIndex(state.pos);
+  if (textEnd === input.length) {
+    state.pos = input.length;
+    unexpected("Unterminated JSX contents");
+    return;
+  }
+
+  if (textEnd === state.start) {
+    const ch = input.charCodeAt(textEnd);
+    if (ch === charCodes.lessThan) {
+      state.pos++;
+      finishToken(tt.jsxTagStart);
       return;
     }
+    getTokenFromCode(ch);
+    return;
+  }
 
-    const ch = input.charCodeAt(state.pos);
-    if (ch === charCodes.lessThan || ch === charCodes.leftCurlyBrace) {
-      if (state.pos === state.start) {
-        if (ch === charCodes.lessThan) {
-          state.pos++;
-          finishToken(tt.jsxTagStart);
-          return;
-        }
-        getTokenFromCode(ch);
-        return;
-      }
-      if (sawNewline && !sawNonWhitespace) {
-        finishToken(tt.jsxEmptyText);
-      } else {
-        finishToken(tt.jsxText);
-      }
-      return;
-    }
-
-    // This is part of JSX text.
-    if (ch === charCodes.lineFeed) {
-      sawNewline = true;
-    } else if (ch !== charCodes.space && ch !== charCodes.carriageReturn && ch !== charCodes.tab) {
-      sawNonWhitespace = true;
-    }
-    state.pos++;
+  state.pos = textEnd;
+  if (jsxTextHasNewline && jsxTextOnlyWhitespace) {
+    finishToken(tt.jsxEmptyText);
+  } else {
+    finishToken(tt.jsxText);
   }
 }
 
-function jsxReadString(quote: number): void {
-  state.pos++;
-  for (;;) {
-    if (state.pos >= input.length) {
-      unexpected("Unterminated string constant");
-      return;
-    }
-
-    const ch = input.charCodeAt(state.pos);
-    if (ch === quote) {
-      state.pos++;
+function scanJSXTextSpecialIndex(start: number): number {
+  jsxTextHasNewline = false;
+  jsxTextOnlyWhitespace = true;
+  const tagStartIndex = input.indexOf(JSX_TAG_START, start);
+  const exprStartIndex = input.indexOf(JSX_EXPR_START, start);
+  let end = input.length;
+  if (tagStartIndex !== -1 && tagStartIndex < end) end = tagStartIndex;
+  if (exprStartIndex !== -1 && exprStartIndex < end) end = exprStartIndex;
+  for (let i = start; i < end; i++) {
+    const ch = input.charCodeAt(i);
+    if (ch === charCodes.lineFeed) {
+      jsxTextHasNewline = true;
+    } else if (ch !== charCodes.space && ch !== charCodes.carriageReturn && ch !== charCodes.tab) {
+      jsxTextOnlyWhitespace = false;
       break;
     }
-    state.pos++;
   }
+  return end;
+}
+
+function jsxReadString(quote: number): void {
+  const quoteChar = quote === charCodes.quotationMark ? QUOTATION_MARK : APOSTROPHE;
+  let quoteIndex = input.indexOf(quoteChar, state.pos + 1);
+  while (quoteIndex !== -1 && hasOddBackslashBefore(quoteIndex)) {
+    quoteIndex = input.indexOf(quoteChar, quoteIndex + 1);
+  }
+  if (quoteIndex === -1) {
+    unexpected("Unterminated string constant");
+    return;
+  }
+  state.pos = quoteIndex + 1;
   finishToken(tt.string);
+}
+
+function hasOddBackslashBefore(index: number): boolean {
+  let slashCount = 0;
+  while (input.charCodeAt(index - slashCount - 1) === charCodes.backslash) {
+    slashCount++;
+  }
+  return (slashCount & 1) === 1;
 }
 
 // Read a JSX identifier (valid tag or attribute name).
@@ -105,8 +126,12 @@ function jsxReadWord(): void {
       return;
     }
     ch = input.charCodeAt(++state.pos);
-  } while (IS_IDENTIFIER_CHAR[ch] || ch === charCodes.dash);
+  } while (isJSXIdentifierChar(ch));
   finishToken(tt.jsxName);
+}
+
+function isJSXIdentifierChar(code: number): boolean {
+  return code === charCodes.dash || IS_IDENTIFIER_CHAR[code] === 1;
 }
 
 // Parse next token as JSX identifier
@@ -320,7 +345,7 @@ export function jsxParseElement(): void {
 // ==================================
 
 export function nextJSXTagToken(): void {
-  state.tokens.push(new Token());
+  appendToken();
   skipSpace();
   state.start = state.pos;
   const code = input.charCodeAt(state.pos);
@@ -361,7 +386,7 @@ export function nextJSXTagToken(): void {
 }
 
 function nextJSXExprToken(): void {
-  state.tokens.push(new Token());
+  appendToken();
   state.start = state.pos;
   jsxReadToken();
 }

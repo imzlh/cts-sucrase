@@ -28,6 +28,7 @@ import {
   tsParseImportEqualsDeclaration,
   tsParseImportSpecifier,
   tsParseMaybeDecoratorArguments,
+  TS_CLASS_MEMBER_MODIFIER_MASK,
   tsParseModifiers,
   tsStartParseFunctionParams,
   tsTryParseClassMemberWithIsStatic,
@@ -51,10 +52,17 @@ import {
   pushTypeContext,
 } from "../tokenizer";
 import {ContextualKeyword} from "../tokenizer/keywords";
-import {Scope} from "../tokenizer/state";
+import {appendScope} from "../tokenizer/state";
 import {type TokenType, TokenType as tt} from "../tokenizer/types";
 import {charCodes} from "../util/charcodes";
-import {getNextContextId, input, isFlowEnabled, isTypeScriptEnabled, state} from "./base";
+import {
+  getNextContextId,
+  input,
+  isFlowEnabled,
+  isTypeScriptEnabled,
+  restoreParserState,
+  state,
+} from "./base";
 import {
   parseCallExpressionArguments,
   parseExprAtom,
@@ -90,7 +98,7 @@ import {
 
 export function parseTopLevel(): File {
   parseBlockBody(tt.eof);
-  state.scopes.push(new Scope(0, state.tokens.length, true));
+  appendScope(state.scopes, 0, state.tokens.length, true);
   if (state.scopeDepth !== 0) {
     throw new Error(`Invalid scope depth at end of file: ${state.scopeDepth}`);
   }
@@ -205,14 +213,40 @@ function parseStatementContent(declaration: boolean): void {
       if (state.contextualKeyword === ContextualKeyword._async) {
         const functionStart = state.start;
         // peek ahead and see if next token is a function
-        const snapshot = state.snapshot();
+        const savedPotentialArrowAt = state.potentialArrowAt;
+        const savedNoAnonFunctionType = state.noAnonFunctionType;
+        const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+        const savedTokensLength = state.tokens.length;
+        const savedScopesLength = state.scopes.length;
+        const savedPos = state.pos;
+        const savedType = state.type;
+        const savedContextualKeyword = state.contextualKeyword;
+        const savedStart = state.start;
+        const savedEnd = state.end;
+        const savedIsType = state.isType;
+        const savedScopeDepth = state.scopeDepth;
+        const savedError = state.error;
         next();
         if (match(tt._function) && !canInsertSemicolon()) {
           expect(tt._function);
           parseFunction(functionStart, true);
           return;
         } else {
-          state.restoreFromSnapshot(snapshot);
+          restoreParserState(
+            savedPotentialArrowAt,
+            savedNoAnonFunctionType,
+            savedInDisallowConditionalTypesContext,
+            savedTokensLength,
+            savedScopesLength,
+            savedPos,
+            savedType,
+            savedContextualKeyword,
+            savedStart,
+            savedEnd,
+            savedIsType,
+            savedScopeDepth,
+            savedError,
+          );
         }
       } else if (
         state.contextualKeyword === ContextualKeyword._using &&
@@ -284,20 +318,74 @@ function startsAwaitUsing(): boolean {
   if (!isContextual(ContextualKeyword._await)) {
     return false;
   }
-  const snapshot = state.snapshot();
+  const savedPotentialArrowAt = state.potentialArrowAt;
+  const savedNoAnonFunctionType = state.noAnonFunctionType;
+  const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const savedTokensLength = state.tokens.length;
+  const savedScopesLength = state.scopes.length;
+  const savedPos = state.pos;
+  const savedType = state.type;
+  const savedContextualKeyword = state.contextualKeyword;
+  const savedStart = state.start;
+  const savedEnd = state.end;
+  const savedIsType = state.isType;
+  const savedScopeDepth = state.scopeDepth;
+  const savedError = state.error;
   // await
   next();
   if (!isContextual(ContextualKeyword._using) || hasPrecedingLineBreak()) {
-    state.restoreFromSnapshot(snapshot);
+    restoreParserState(
+      savedPotentialArrowAt,
+      savedNoAnonFunctionType,
+      savedInDisallowConditionalTypesContext,
+      savedTokensLength,
+      savedScopesLength,
+      savedPos,
+      savedType,
+      savedContextualKeyword,
+      savedStart,
+      savedEnd,
+      savedIsType,
+      savedScopeDepth,
+      savedError,
+    );
     return false;
   }
   // using
   next();
   if (!match(tt.name) || hasPrecedingLineBreak()) {
-    state.restoreFromSnapshot(snapshot);
+    restoreParserState(
+      savedPotentialArrowAt,
+      savedNoAnonFunctionType,
+      savedInDisallowConditionalTypesContext,
+      savedTokensLength,
+      savedScopesLength,
+      savedPos,
+      savedType,
+      savedContextualKeyword,
+      savedStart,
+      savedEnd,
+      savedIsType,
+      savedScopeDepth,
+      savedError,
+    );
     return false;
   }
-  state.restoreFromSnapshot(snapshot);
+  restoreParserState(
+    savedPotentialArrowAt,
+    savedNoAnonFunctionType,
+    savedInDisallowConditionalTypesContext,
+    savedTokensLength,
+    savedScopesLength,
+    savedPos,
+    savedType,
+    savedContextualKeyword,
+    savedStart,
+    savedEnd,
+    savedIsType,
+    savedScopeDepth,
+    savedError,
+  );
   return true;
 }
 
@@ -361,7 +449,7 @@ function parseForStatement(): void {
   const startTokenIndex = state.tokens.length;
   parseAmbiguousForStatement();
   const endTokenIndex = state.tokens.length;
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, false));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, false);
   state.scopeDepth--;
 }
 
@@ -483,7 +571,7 @@ function parseSwitchStatement(): void {
   }
   next(); // Closing brace
   const endTokenIndex = state.tokens.length;
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, false));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, false);
   state.scopeDepth--;
 }
 
@@ -521,7 +609,7 @@ function parseTryStatement(): void {
       // We need a special scope for the catch binding which includes the binding itself and the
       // catch block.
       const endTokenIndex = state.tokens.length;
-      state.scopes.push(new Scope(catchBindingStartTokenIndex, endTokenIndex, false));
+      appendScope(state.scopes, catchBindingStartTokenIndex, endTokenIndex, false);
       state.scopeDepth--;
     }
   }
@@ -577,7 +665,7 @@ export function parseBlock(isFunctionScope: boolean = false, contextId: number =
     state.tokens[state.tokens.length - 1].contextId = contextId;
   }
   const endTokenIndex = state.tokens.length;
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, isFunctionScope));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, isFunctionScope);
   state.scopeDepth--;
 }
 
@@ -678,10 +766,10 @@ export function parseFunction(
   const endTokenIndex = state.tokens.length;
   // In addition to the block scope of the function body, we need a separate function-style scope
   // that includes the params.
-  state.scopes.push(new Scope(startTokenIndex, endTokenIndex, true));
+  appendScope(state.scopes, startTokenIndex, endTokenIndex, true);
   state.scopeDepth--;
   if (nameScopeStartTokenIndex !== null) {
-    state.scopes.push(new Scope(nameScopeStartTokenIndex, endTokenIndex, true));
+    appendScope(state.scopes, nameScopeStartTokenIndex, endTokenIndex, true);
     state.scopeDepth--;
   }
 }
@@ -742,7 +830,7 @@ export function parseClass(isStatement: boolean, optionalId: boolean = false): v
   state.tokens[state.tokens.length - 1].contextId = contextId;
   if (nameScopeStartTokenIndex !== null) {
     const endTokenIndex = state.tokens.length;
-    state.scopes.push(new Scope(nameScopeStartTokenIndex, endTokenIndex, false));
+    appendScope(state.scopes, nameScopeStartTokenIndex, endTokenIndex, false);
     state.scopeDepth--;
   }
 }
@@ -774,13 +862,7 @@ function parseClassBody(classContextId: number): void {
 
 function parseClassMember(memberStart: number, classContextId: number): void {
   if (isTypeScriptEnabled) {
-    tsParseModifiers([
-      ContextualKeyword._declare,
-      ContextualKeyword._public,
-      ContextualKeyword._protected,
-      ContextualKeyword._private,
-      ContextualKeyword._override,
-    ]);
+    tsParseModifiers(TS_CLASS_MEMBER_MODIFIER_MASK);
   }
   let isStatic = false;
   if (match(tt.name) && state.contextualKeyword === ContextualKeyword._static) {
@@ -1172,21 +1254,89 @@ function parseExportSpecifier(): void {
  * import module, {bar} from "foo";
  */
 function isImportReflection(): boolean {
-  const snapshot = state.snapshot();
+  const savedPotentialArrowAt = state.potentialArrowAt;
+  const savedNoAnonFunctionType = state.noAnonFunctionType;
+  const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const savedTokensLength = state.tokens.length;
+  const savedScopesLength = state.scopes.length;
+  const savedPos = state.pos;
+  const savedType = state.type;
+  const savedContextualKeyword = state.contextualKeyword;
+  const savedStart = state.start;
+  const savedEnd = state.end;
+  const savedIsType = state.isType;
+  const savedScopeDepth = state.scopeDepth;
+  const savedError = state.error;
   expectContextual(ContextualKeyword._module);
   if (eatContextual(ContextualKeyword._from)) {
     if (isContextual(ContextualKeyword._from)) {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
       return true;
     } else {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
       return false;
     }
   } else if (match(tt.comma)) {
-    state.restoreFromSnapshot(snapshot);
+    restoreParserState(
+      savedPotentialArrowAt,
+      savedNoAnonFunctionType,
+      savedInDisallowConditionalTypesContext,
+      savedTokensLength,
+      savedScopesLength,
+      savedPos,
+      savedType,
+      savedContextualKeyword,
+      savedStart,
+      savedEnd,
+      savedIsType,
+      savedScopeDepth,
+      savedError,
+    );
     return false;
   } else {
-    state.restoreFromSnapshot(snapshot);
+    restoreParserState(
+      savedPotentialArrowAt,
+      savedNoAnonFunctionType,
+      savedInDisallowConditionalTypesContext,
+      savedTokensLength,
+      savedScopesLength,
+      savedPos,
+      savedType,
+      savedContextualKeyword,
+      savedStart,
+      savedEnd,
+      savedIsType,
+      savedScopeDepth,
+      savedError,
+    );
     return true;
   }
 }

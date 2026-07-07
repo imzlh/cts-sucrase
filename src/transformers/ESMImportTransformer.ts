@@ -6,19 +6,26 @@ import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
 import elideImportEquals from "../util/elideImportEquals";
 import getDeclarationInfo, {
+  hasDeclarationName,
   type DeclarationInfo,
   EMPTY_DECLARATION_INFO,
 } from "../util/getDeclarationInfo";
-import getImportExportSpecifierInfo from "../util/getImportExportSpecifierInfo";
-import {getNonTypeIdentifiers} from "../util/getNonTypeIdentifiers";
+import {
+  type ImportExportSpecifierInfo,
+  readImportExportSpecifierInfo,
+} from "../util/getImportExportSpecifierInfo";
+import {
+  hasNonTypeIdentifier,
+  type NonTypeIdentifierCache,
+} from "../util/getNonTypeIdentifiers";
 import isExportFrom from "../util/isExportFrom";
 import {removeMaybeImportAttributes} from "../util/removeMaybeImportAttributes";
 import shouldElideDefaultExport from "../util/shouldElideDefaultExport";
 import Transformer from "./Transformer";
 
 export default class ESMImportTransformer extends Transformer {
-  private nonTypeIdentifiers: Set<string>;
-  private declarationInfo: DeclarationInfo;
+  private nonTypeIdentifierCache: NonTypeIdentifierCache = {__proto__: null};
+  private declarationInfo: DeclarationInfo | null = null;
 
   constructor(
     readonly tokens: TokenProcessor,
@@ -28,26 +35,39 @@ export default class ESMImportTransformer extends Transformer {
     readonly isTypeScriptTransformEnabled: boolean,
     readonly isFlowTransformEnabled: boolean,
     readonly keepUnusedImports: boolean,
-    options: Options,
+    readonly options: Options,
   ) {
     super();
-    this.nonTypeIdentifiers =
-      isTypeScriptTransformEnabled && !keepUnusedImports
-        ? getNonTypeIdentifiers(tokens, options)
-        : new Set();
-    this.declarationInfo =
-      isTypeScriptTransformEnabled && !keepUnusedImports
-        ? getDeclarationInfo(tokens)
-        : EMPTY_DECLARATION_INFO;
+  }
+
+  private removeImportAttributes(): void {
+    if (!this.options.preserveImportAttributes) {
+      removeMaybeImportAttributes(this.tokens);
+    }
   }
 
   process(): boolean {
-    if (this.tokens.matches3(tt._import, tt.name, tt.eq)) {
+    const tokenIndex = this.tokens.currentIndex();
+    const tokenList = this.tokens.tokens;
+    const token = tokenList[tokenIndex];
+    const nextToken = tokenList[tokenIndex + 1];
+    const thirdToken = tokenList[tokenIndex + 2];
+    const tokenType = token.type;
+    const nextTokenType = nextToken?.type;
+    const thirdTokenType = thirdToken?.type;
+    if (
+      tokenType === tt._import &&
+      nextTokenType === tt.name &&
+      thirdTokenType === tt.eq
+    ) {
       return this.processImportEquals();
     }
     if (
-      this.tokens.matches4(tt._import, tt.name, tt.name, tt.eq) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._type)
+      tokenType === tt._import &&
+      nextTokenType === tt.name &&
+      nextToken.contextualKeyword === ContextualKeyword._type &&
+      thirdTokenType === tt.name &&
+      tokenList[tokenIndex + 3]?.type === tt.eq
     ) {
       this.tokens.removeInitialToken();
       for (let i = 0; i < 7; i++) {
@@ -55,25 +75,28 @@ export default class ESMImportTransformer extends Transformer {
       }
       return true;
     }
-    if (this.tokens.matches1(tt._import)) {
+    if (tokenType === tt._import) {
       return this.processImport();
     }
-    if (this.tokens.matches2(tt._export, tt._default)) {
+    if (tokenType === tt._export && nextTokenType === tt._default) {
       return this.processExportDefault();
     }
-    if (this.tokens.matches2(tt._export, tt.braceL)) {
+    if (tokenType === tt._export && nextTokenType === tt.braceL) {
       return this.processNamedExports();
     }
     if (
-      this.tokens.matches2(tt._export, tt.name) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._type)
+      tokenType === tt._export &&
+      nextTokenType === tt.name &&
+      nextToken.contextualKeyword === ContextualKeyword._type
     ) {
       return this.processExportType();
     }
     // `export declare type Foo = ...`
     if (
-      this.tokens.matches3(tt._export, tt._declare, tt.name) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._type)
+      tokenType === tt._export &&
+      nextTokenType === tt._declare &&
+      thirdTokenType === tt.name &&
+      thirdToken.contextualKeyword === ContextualKeyword._type
     ) {
       return this.processExportType();
     }
@@ -82,10 +105,15 @@ export default class ESMImportTransformer extends Transformer {
 
   private processExportType(): boolean {
     // Peek whether this is `export declare type ...`
-    const hasDeclare = this.tokens.matches3(tt._export, tt._declare, tt.name) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._type);
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    const hasDeclare =
+      tokenList[tokenIndex].type === tt._export &&
+      tokenList[tokenIndex + 1].type === tt._declare &&
+      tokenList[tokenIndex + 2].type === tt.name &&
+      tokenList[tokenIndex + 2].contextualKeyword === ContextualKeyword._type;
     const thirdTokenOffset = hasDeclare ? 3 : 2;
-    const thirdToken = this.tokens.tokenAtRelativeIndex(thirdTokenOffset);
+    const thirdToken = tokenList[tokenIndex + thirdTokenOffset];
     if (!thirdToken) {
       this.tokens.removeInitialToken();
       while (!this.tokens.isAtEnd()) this.tokens.removeToken();
@@ -93,39 +121,44 @@ export default class ESMImportTransformer extends Transformer {
     }
     const isBraceL = thirdToken.type === tt.braceL;
     const typeName = (!isBraceL && thirdToken.type === tt.name)
-      ? this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + thirdTokenOffset)
+      ? this.tokens.identifierNameForToken(thirdToken)
       : null;
 
     if (isBraceL) {
-      const typeNames: string[] = [];
+      const isReExport = this.isExportTypeReExport(thirdTokenOffset);
+      const valueDeclarations = isReExport ? null : this.getDeclarationInfo().valueDeclarations;
+      let placeholderCode = "";
       this.tokens.removeInitialToken(); // export
       if (hasDeclare) this.tokens.removeToken(); // declare
       this.tokens.removeToken();        // type
       this.tokens.removeToken();        // {
-      while (!this.tokens.isAtEnd() && !this.tokens.matches1(tt.braceR)) {
-        const specifierInfo = getImportExportSpecifierInfo(this.tokens);
-        if (!specifierInfo.isType && specifierInfo.rightName) {
-          typeNames.push(specifierInfo.rightName);
+      const specifierInfo = makeSpecifierInfo();
+      while (!this.tokens.isAtEnd() && tokenList[this.tokens.currentIndex()].type !== tt.braceR) {
+        readImportExportSpecifierInfo(this.tokens, specifierInfo);
+        const rightName = specifierInfo.rightName;
+        if (!isReExport &&
+            valueDeclarations !== null &&
+            !specifierInfo.isType &&
+            rightName != null &&
+            !hasDeclarationName(valueDeclarations, rightName)) {
+          placeholderCode += `export const ${rightName} = undefined;`;
         }
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
           this.tokens.removeToken();
         }
-        if (this.tokens.matches1(tt.comma)) this.tokens.removeToken();
+        if (tokenList[this.tokens.currentIndex()].type === tt.comma) this.tokens.removeToken();
       }
       if (!this.tokens.isAtEnd()) this.tokens.removeToken(); // }
-      const hasFrom = this.tokens.matchesContextual(ContextualKeyword._from);
+      const token = tokenList[this.tokens.currentIndex()];
+      const hasFrom = token.type === tt.name && token.contextualKeyword === ContextualKeyword._from;
       if (hasFrom) {
         this.tokens.removeToken(); // from
         this.tokens.removeToken(); // 'module'
-        removeMaybeImportAttributes(this.tokens); // BUG FIX: handle `with { ... }`
+        this.removeImportAttributes(); // BUG FIX: handle `with { ... }`
       }
-      if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
-      if (!hasFrom && typeNames.length > 0) {
-        for (const name of typeNames) {
-          if (!this.declarationInfo.valueDeclarations.has(name)) {
-            this.tokens.appendCode(`export const ${name} = undefined;`);
-          }
-        }
+      if (tokenList[this.tokens.currentIndex()].type === tt.semi) this.tokens.removeToken();
+      if (placeholderCode) {
+        this.tokens.appendCode(placeholderCode);
       }
     } else if (typeName) {
       // `export [declare] type Foo = <type-expr>;`
@@ -135,20 +168,23 @@ export default class ESMImportTransformer extends Transformer {
       this.tokens.removeToken(); // type
       this.tokens.removeToken(); // Foo
       let depth = 0;
+      const tokenList = this.tokens.tokens;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL) ||
-            this.tokens.matches1(tt.parenL) || this.tokens.matches1(tt.bracketL)) {
+        const token = tokenList[this.tokens.currentIndex()];
+        const tokenType = token.type;
+        if (tokenType === tt.braceL || tokenType === tt.dollarBraceL ||
+            tokenType === tt.parenL || tokenType === tt.bracketL) {
           depth++;
-        } else if (this.tokens.matches1(tt.braceR) || this.tokens.matches1(tt.parenR) ||
-                   this.tokens.matches1(tt.bracketR)) {
+        } else if (tokenType === tt.braceR || tokenType === tt.parenR ||
+                   tokenType === tt.bracketR) {
           depth--;
-        } else if (depth === 0 && !this.tokens.currentToken().isType) {
-          if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
+        } else if (depth === 0 && !token.isType) {
+          if (tokenType === tt.semi) this.tokens.removeToken();
           break;
         }
         this.tokens.removeToken();
       }
-      if (!this.declarationInfo.valueDeclarations.has(typeName)) {
+      if (!hasDeclarationName(this.getDeclarationInfo().valueDeclarations, typeName)) {
         this.tokens.appendCode(`export const ${typeName} = undefined;`);
       }
     } else {
@@ -157,11 +193,14 @@ export default class ESMImportTransformer extends Transformer {
       if (hasDeclare) this.tokens.removeToken(); // declare
       this.tokens.removeToken(); // type
       let depth = 0;
+      const tokenList = this.tokens.tokens;
       while (!this.tokens.isAtEnd()) {
-        if (this.tokens.matches1(tt.braceL) || this.tokens.matches1(tt.dollarBraceL)) depth++;
-        else if (this.tokens.matches1(tt.braceR)) { if (depth === 0) break; depth--; }
-        else if (depth === 0 && !this.tokens.currentToken().isType) {
-          if (this.tokens.matches1(tt.semi)) this.tokens.removeToken();
+        const token = tokenList[this.tokens.currentIndex()];
+        const tokenType = token.type;
+        if (tokenType === tt.braceL || tokenType === tt.dollarBraceL) depth++;
+        else if (tokenType === tt.braceR) { if (depth === 0) break; depth--; }
+        else if (depth === 0 && !token.isType) {
+          if (tokenType === tt.semi) this.tokens.removeToken();
           break;
         }
         this.tokens.removeToken();
@@ -170,8 +209,20 @@ export default class ESMImportTransformer extends Transformer {
     return true;
   }
 
+  private isExportTypeReExport(braceTokenOffset: number): boolean {
+    const tokens = this.tokens.tokens;
+    let index = this.tokens.currentIndex() + braceTokenOffset + 1;
+    while (index < tokens.length && tokens[index].type !== tt.braceR) {
+      index++;
+    }
+    return index + 1 < tokens.length &&
+      tokens[index + 1].type === tt.name &&
+      tokens[index + 1].contextualKeyword === ContextualKeyword._from;
+  }
+
   private processImportEquals(): boolean {
-    const importName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 1);
+    const tokenList = this.tokens.tokens;
+    const importName = this.tokens.identifierNameForToken(tokenList[this.tokens.currentIndex() + 1]);
     if (this.shouldAutomaticallyElideImportedName(importName)) {
       elideImportEquals(this.tokens);
     } else {
@@ -181,44 +232,64 @@ export default class ESMImportTransformer extends Transformer {
   }
 
   private processImport(): boolean {
-    if (this.tokens.matches2(tt._import, tt.parenL)) {
+    const tokenList = this.tokens.tokens;
+    if (tokenList[this.tokens.currentIndex() + 1].type === tt.parenL) {
       return false;
     }
 
-    const snapshot = this.tokens.snapshot();
+    const savedResultCodeLength = this.tokens.currentResultCodeLength();
+    const savedTokenIndex = this.tokens.currentIndex();
     const allImportsRemoved = this.removeImportTypeBindings();
     if (allImportsRemoved) {
-      this.tokens.restoreToSnapshot(snapshot);
-      while (!this.tokens.matches1(tt.string)) {
+      this.tokens.restoreToState(savedResultCodeLength, savedTokenIndex);
+      while (tokenList[this.tokens.currentIndex()].type !== tt.string) {
         this.tokens.removeToken();
       }
       this.tokens.removeToken();
-      removeMaybeImportAttributes(this.tokens);
-      if (this.tokens.matches1(tt.semi)) {
+      this.removeImportAttributes();
+      if (tokenList[this.tokens.currentIndex()].type === tt.semi) {
         this.tokens.removeToken();
       }
+    } else {
+      const currentToken = tokenList[this.tokens.currentIndex()];
+      if (
+        currentToken.type === tt.name &&
+        currentToken.contextualKeyword === ContextualKeyword._from &&
+        tokenList[this.tokens.currentIndex() + 1].type === tt.string
+      ) {
+        this.tokens.copyToken();
+        this.tokens.copyToken();
+      }
+      this.removeImportAttributes();
     }
     return true;
   }
 
   private removeImportTypeBindings(): boolean {
     this.tokens.copyExpectedToken(tt._import);
+    const tokenIndex = this.tokens.currentIndex();
+    const tokenList = this.tokens.tokens;
+    const token = tokenList[tokenIndex];
+    const nextToken = tokenList[tokenIndex + 1];
     if (
-      this.tokens.matchesContextual(ContextualKeyword._type) &&
-      !this.tokens.matches1AtIndex(this.tokens.currentIndex() + 1, tt.comma) &&
-      !this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 1, ContextualKeyword._from)
+      token.type === tt.name &&
+      token.contextualKeyword === ContextualKeyword._type &&
+      nextToken.type !== tt.comma &&
+      !(nextToken.type === tt.name && nextToken.contextualKeyword === ContextualKeyword._from)
     ) {
       return true;
     }
 
-    if (this.tokens.matches1(tt.string)) {
+    if (token.type === tt.string) {
       this.tokens.copyToken();
       return false;
     }
 
     if (
-      this.tokens.matchesContextual(ContextualKeyword._module) &&
-      this.tokens.matchesContextualAtIndex(this.tokens.currentIndex() + 2, ContextualKeyword._from)
+      token.type === tt.name &&
+      token.contextualKeyword === ContextualKeyword._module &&
+      tokenList[tokenIndex + 2].type === tt.name &&
+      tokenList[tokenIndex + 2].contextualKeyword === ContextualKeyword._from
     ) {
       this.tokens.copyToken();
     }
@@ -227,24 +298,27 @@ export default class ESMImportTransformer extends Transformer {
     let foundAnyNamedImport = false;
     let needsComma = false;
 
-    if (this.tokens.matches1(tt.name)) {
-      if (this.shouldAutomaticallyElideImportedName(this.tokens.identifierName())) {
+    if (token.type === tt.name) {
+      if (this.shouldAutomaticallyElideImportedName(this.tokens.identifierNameForToken(token))) {
         this.tokens.removeToken();
-        if (this.tokens.matches1(tt.comma)) {
+        if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
           this.tokens.removeToken();
         }
       } else {
         foundNonTypeImport = true;
         this.tokens.copyToken();
-        if (this.tokens.matches1(tt.comma)) {
+        if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
           needsComma = true;
           this.tokens.removeToken();
         }
       }
     }
 
-    if (this.tokens.matches1(tt.star)) {
-      if (this.shouldAutomaticallyElideImportedName(this.tokens.identifierNameAtRelativeIndex(2))) {
+    const currentIndex = this.tokens.currentIndex();
+    if (tokenList[currentIndex].type === tt.star) {
+      if (
+        this.shouldAutomaticallyElideImportedName(this.tokens.identifierNameForToken(tokenList[currentIndex + 2]))
+      ) {
         this.tokens.removeToken();
         this.tokens.removeToken();
         this.tokens.removeToken();
@@ -257,22 +331,25 @@ export default class ESMImportTransformer extends Transformer {
         this.tokens.copyExpectedToken(tt.name);
         this.tokens.copyExpectedToken(tt.name);
       }
-    } else if (this.tokens.matches1(tt.braceL)) {
+    } else if (tokenList[currentIndex].type === tt.braceL) {
       if (needsComma) {
         this.tokens.appendCode(",");
       }
       this.tokens.copyToken();
-      while (!this.tokens.matches1(tt.braceR)) {
+      const specifierInfo = makeSpecifierInfo();
+      while (tokenList[this.tokens.currentIndex()].type !== tt.braceR) {
         foundAnyNamedImport = true;
-        const specifierInfo = getImportExportSpecifierInfo(this.tokens);
+        readImportExportSpecifierInfo(this.tokens, specifierInfo);
+        const rightName = specifierInfo.rightName;
         if (
           specifierInfo.isType ||
-          this.shouldAutomaticallyElideImportedName(specifierInfo.rightName)
+          rightName == null ||
+          this.shouldAutomaticallyElideImportedName(rightName)
         ) {
           while (this.tokens.currentIndex() < specifierInfo.endIndex) {
             this.tokens.removeToken();
           }
-          if (this.tokens.matches1(tt.comma)) {
+          if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
             this.tokens.removeToken();
           }
         } else {
@@ -280,7 +357,7 @@ export default class ESMImportTransformer extends Transformer {
           while (this.tokens.currentIndex() < specifierInfo.endIndex) {
             this.tokens.copyToken();
           }
-          if (this.tokens.matches1(tt.comma)) {
+          if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
             this.tokens.copyToken();
           }
         }
@@ -304,7 +381,7 @@ export default class ESMImportTransformer extends Transformer {
     return (
       this.isTypeScriptTransformEnabled &&
       !this.keepUnusedImports &&
-      !this.nonTypeIdentifiers.has(name)
+      !hasNonTypeIdentifier(this.tokens, this.options, this.nonTypeIdentifierCache, name)
     );
   }
 
@@ -314,7 +391,7 @@ export default class ESMImportTransformer extends Transformer {
         this.isTypeScriptTransformEnabled,
         this.keepUnusedImports,
         this.tokens,
-        this.declarationInfo,
+        this.getDeclarationInfo(),
       )
     ) {
       this.tokens.removeInitialToken();
@@ -330,21 +407,25 @@ export default class ESMImportTransformer extends Transformer {
     if (!this.isTypeScriptTransformEnabled) {
       return false;
     }
+    const tokenList = this.tokens.tokens;
     this.tokens.copyExpectedToken(tt._export);
     this.tokens.copyExpectedToken(tt.braceL);
 
     const isReExport = isExportFrom(this.tokens);
     let foundNonTypeExport = false;
-    while (!this.tokens.matches1(tt.braceR)) {
-      const specifierInfo = getImportExportSpecifierInfo(this.tokens);
+    const specifierInfo = makeSpecifierInfo();
+    while (tokenList[this.tokens.currentIndex()].type !== tt.braceR) {
+      readImportExportSpecifierInfo(this.tokens, specifierInfo);
+      const leftName = specifierInfo.leftName;
       if (
         specifierInfo.isType ||
-        (!isReExport && this.shouldElideExportedName(specifierInfo.leftName))
+        leftName == null ||
+        (!isReExport && this.shouldElideExportedName(leftName))
       ) {
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
           this.tokens.removeToken();
         }
-        if (this.tokens.matches1(tt.comma)) {
+        if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
           this.tokens.removeToken();
         }
       } else {
@@ -352,7 +433,7 @@ export default class ESMImportTransformer extends Transformer {
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
           this.tokens.copyToken();
         }
-        if (this.tokens.matches1(tt.comma)) {
+        if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
           this.tokens.copyToken();
         }
       }
@@ -362,19 +443,34 @@ export default class ESMImportTransformer extends Transformer {
     if (!this.keepUnusedImports && isReExport && !foundNonTypeExport) {
       this.tokens.removeToken();
       this.tokens.removeToken();
-      removeMaybeImportAttributes(this.tokens);
+      this.removeImportAttributes();
     }
 
     return true;
   }
 
   private shouldElideExportedName(name: string): boolean {
+    const declarationInfo = this.getDeclarationInfo();
     return (
       this.isTypeScriptTransformEnabled &&
       !this.keepUnusedImports &&
-      this.declarationInfo.typeDeclarations.has(name) &&
-      !this.declarationInfo.valueDeclarations.has(name) &&
-      !this.declarationInfo.exportedTypeNames.has(name)
+      hasDeclarationName(declarationInfo.typeDeclarations, name) &&
+      !hasDeclarationName(declarationInfo.valueDeclarations, name) &&
+      !hasDeclarationName(declarationInfo.exportedTypeNames, name)
     );
   }
+
+  private getDeclarationInfo(): DeclarationInfo {
+    if (!this.isTypeScriptTransformEnabled || this.keepUnusedImports) {
+      return EMPTY_DECLARATION_INFO;
+    }
+    if (this.declarationInfo === null) {
+      this.declarationInfo = getDeclarationInfo(this.tokens);
+    }
+    return this.declarationInfo;
+  }
+}
+
+function makeSpecifierInfo(): ImportExportSpecifierInfo {
+  return {isType: false, leftName: null, rightName: null, endIndex: 0};
 }

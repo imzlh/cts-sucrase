@@ -2,34 +2,35 @@ import type {Token} from "./index";
 import {ContextualKeyword} from "./keywords";
 import {type TokenType, TokenType as tt} from "./types";
 
-export class Scope {
+export interface Scope {
   startTokenIndex: number;
   endTokenIndex: number;
   isFunctionScope: boolean;
-
-  constructor(startTokenIndex: number, endTokenIndex: number, isFunctionScope: boolean) {
-    this.startTokenIndex = startTokenIndex;
-    this.endTokenIndex = endTokenIndex;
-    this.isFunctionScope = isFunctionScope;
-  }
 }
 
-export class StateSnapshot {
-  constructor(
-    readonly potentialArrowAt: number,
-    readonly noAnonFunctionType: boolean,
-    readonly inDisallowConditionalTypesContext: boolean,
-    readonly tokensLength: number,
-    readonly scopesLength: number,
-    readonly pos: number,
-    readonly type: TokenType,
-    readonly contextualKeyword: ContextualKeyword,
-    readonly start: number,
-    readonly end: number,
-    readonly isType: boolean,
-    readonly scopeDepth: number,
-    readonly error: Error | null,
-  ) {}
+export function appendScope(
+  scopes: Array<Scope>,
+  startTokenIndex: number,
+  endTokenIndex: number,
+  isFunctionScope: boolean,
+): void {
+  scopes[scopes.length] = {startTokenIndex, endTokenIndex, isFunctionScope};
+}
+
+export interface StateSnapshot {
+  potentialArrowAt: number;
+  noAnonFunctionType: boolean;
+  inDisallowConditionalTypesContext: boolean;
+  tokensLength: number;
+  scopesLength: number;
+  pos: number;
+  type: TokenType;
+  contextualKeyword: ContextualKeyword;
+  start: number;
+  end: number;
+  isType: boolean;
+  scopeDepth: number;
+  error: Error | null;
 }
 
 export default class State {
@@ -71,21 +72,21 @@ export default class State {
   error: Error | null = null;
 
   snapshot(): StateSnapshot {
-    return new StateSnapshot(
-      this.potentialArrowAt,
-      this.noAnonFunctionType,
-      this.inDisallowConditionalTypesContext,
-      this.tokens.length,
-      this.scopes.length,
-      this.pos,
-      this.type,
-      this.contextualKeyword,
-      this.start,
-      this.end,
-      this.isType,
-      this.scopeDepth,
-      this.error,
-    );
+    return {
+      potentialArrowAt: this.potentialArrowAt,
+      noAnonFunctionType: this.noAnonFunctionType,
+      inDisallowConditionalTypesContext: this.inDisallowConditionalTypesContext,
+      tokensLength: this.tokens.length,
+      scopesLength: this.scopes.length,
+      pos: this.pos,
+      type: this.type,
+      contextualKeyword: this.contextualKeyword,
+      start: this.start,
+      end: this.end,
+      isType: this.isType,
+      scopeDepth: this.scopeDepth,
+      error: this.error,
+    };
   }
 
   restoreFromSnapshot(snapshot: StateSnapshot): void {

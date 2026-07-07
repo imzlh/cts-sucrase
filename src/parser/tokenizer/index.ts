@@ -4,10 +4,17 @@ import {input, isFlowEnabled, state} from "../traverser/base";
 import {unexpected} from "../traverser/util";
 import {charCodes} from "../util/charcodes";
 import {IS_IDENTIFIER_CHAR, IS_IDENTIFIER_START} from "../util/identifier";
-import {IS_WHITESPACE, skipWhiteSpace} from "../util/whitespace";
+import {IS_WHITESPACE} from "../util/whitespace";
 import {ContextualKeyword} from "./keywords";
 import readWord from "./readWord";
 import {type TokenType, TokenType as tt} from "./types";
+
+const APOSTROPHE = "'";
+const QUOTATION_MARK = "\"";
+const LINE_FEED = "\n";
+const CARRIAGE_RETURN = "\r";
+const LINE_SEPARATOR = "\u2028";
+const PARAGRAPH_SEPARATOR = "\u2029";
 
 export enum IdentifierRole {
   Access,
@@ -105,32 +112,9 @@ export function isObjectShorthandDeclaration(token: Token): boolean {
   );
 }
 
-// Object type used to represent tokens. Note that normally, tokens
-// simply exist as properties on the parser object. This is only
-// used for the onToken callback and the external tokenizer.
-export class Token {
-  constructor() {
-    this.type = state.type;
-    this.contextualKeyword = state.contextualKeyword;
-    this.start = state.start;
-    this.end = state.end;
-    this.scopeDepth = state.scopeDepth;
-    this.isType = state.isType;
-    this.identifierRole = null;
-    this.jsxRole = null;
-    this.shadowsGlobal = false;
-    this.isAsyncOperation = false;
-    this.contextId = null;
-    this.rhsEndIndex = null;
-    this.isExpression = false;
-    this.numNullishCoalesceStarts = 0;
-    this.numNullishCoalesceEnds = 0;
-    this.isOptionalChainStart = false;
-    this.isOptionalChainEnd = false;
-    this.subscriptStartIndex = null;
-    this.nullishStartIndex = null;
-  }
-
+// Object type used to represent tokens. Keep appendToken field order stable:
+// QJS benefits from monomorphic plain objects here more than constructor calls.
+export interface Token {
   type: TokenType;
   contextualKeyword: ContextualKeyword;
   start: number;
@@ -165,17 +149,41 @@ export class Token {
   nullishStartIndex: number | null;
 }
 
+export function appendToken(): void {
+  state.tokens[state.tokens.length] = {
+    type: state.type,
+    contextualKeyword: state.contextualKeyword,
+    start: state.start,
+    end: state.end,
+    scopeDepth: state.scopeDepth,
+    isType: state.isType,
+    identifierRole: null,
+    jsxRole: null,
+    shadowsGlobal: false,
+    isAsyncOperation: false,
+    contextId: null,
+    rhsEndIndex: null,
+    isExpression: false,
+    numNullishCoalesceStarts: 0,
+    numNullishCoalesceEnds: 0,
+    isOptionalChainStart: false,
+    isOptionalChainEnd: false,
+    subscriptStartIndex: null,
+    nullishStartIndex: null,
+  };
+}
+
 // ## Tokenizer
 
 // Move to the next token
 export function next(): void {
-  state.tokens.push(new Token());
+  appendToken();
   nextToken();
 }
 
 // Call instead of next when inside a template, since that needs to be handled differently.
 export function nextTemplateToken(): void {
-  state.tokens.push(new Token());
+  appendToken();
   state.start = state.pos;
   readTmplToken();
 }
@@ -223,29 +231,112 @@ export function match(type: TokenType): boolean {
 }
 
 export function lookaheadType(): TokenType {
-  const snapshot = state.snapshot();
-  next();
-  const type = state.type;
-  state.restoreFromSnapshot(snapshot);
-  return type;
-}
-
-export class TypeAndKeyword {
-  type: TokenType;
-  contextualKeyword: ContextualKeyword;
-  constructor(type: TokenType, contextualKeyword: ContextualKeyword) {
-    this.type = type;
-    this.contextualKeyword = contextualKeyword;
-  }
-}
-
-export function lookaheadTypeAndKeyword(): TypeAndKeyword {
-  const snapshot = state.snapshot();
-  next();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
   const type = state.type;
   const contextualKeyword = state.contextualKeyword;
-  state.restoreFromSnapshot(snapshot);
-  return new TypeAndKeyword(type, contextualKeyword);
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
+  next();
+  const nextType = state.type;
+  restoreLookaheadState(
+    potentialArrowAt,
+    noAnonFunctionType,
+    inDisallowConditionalTypesContext,
+    tokensLength,
+    scopesLength,
+    pos,
+    type,
+    contextualKeyword,
+    start,
+    end,
+    isType,
+    scopeDepth,
+    error,
+  );
+  return nextType;
+}
+
+export interface TypeAndKeyword {
+  type: TokenType;
+  contextualKeyword: ContextualKeyword;
+}
+
+const lookaheadTypeAndKeywordResult: TypeAndKeyword = {
+  type: tt.eof,
+  contextualKeyword: ContextualKeyword.NONE,
+};
+
+export function lookaheadTypeAndKeyword(): TypeAndKeyword {
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
+  next();
+  lookaheadTypeAndKeywordResult.type = state.type;
+  lookaheadTypeAndKeywordResult.contextualKeyword = state.contextualKeyword;
+  restoreLookaheadState(
+    potentialArrowAt,
+    noAnonFunctionType,
+    inDisallowConditionalTypesContext,
+    tokensLength,
+    scopesLength,
+    pos,
+    type,
+    contextualKeyword,
+    start,
+    end,
+    isType,
+    scopeDepth,
+    error,
+  );
+  return lookaheadTypeAndKeywordResult;
+}
+
+function restoreLookaheadState(
+  potentialArrowAt: number,
+  noAnonFunctionType: boolean,
+  inDisallowConditionalTypesContext: boolean,
+  tokensLength: number,
+  scopesLength: number,
+  pos: number,
+  type: TokenType,
+  contextualKeyword: ContextualKeyword,
+  start: number,
+  end: number,
+  isType: boolean,
+  scopeDepth: number,
+  error: Error | null,
+): void {
+  state.potentialArrowAt = potentialArrowAt;
+  state.noAnonFunctionType = noAnonFunctionType;
+  state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+  state.tokens.length = tokensLength;
+  state.scopes.length = scopesLength;
+  state.pos = pos;
+  state.type = type;
+  state.contextualKeyword = contextualKeyword;
+  state.start = start;
+  state.end = end;
+  state.isType = isType;
+  state.scopeDepth = scopeDepth;
+  state.error = error;
 }
 
 export function nextTokenStart(): number {
@@ -253,9 +344,7 @@ export function nextTokenStart(): number {
 }
 
 export function nextTokenStartSince(pos: number): number {
-  skipWhiteSpace.lastIndex = pos;
-  const skip = skipWhiteSpace.exec(input);
-  return pos + skip![0].length;
+  return skipWhiteSpaceFrom(pos);
 }
 
 export function lookaheadCharCode(): number {
@@ -300,32 +389,17 @@ function readToken(code: number): void {
 }
 
 function skipBlockComment(): void {
-  while (
-    input.charCodeAt(state.pos) !== charCodes.asterisk ||
-    input.charCodeAt(state.pos + 1) !== charCodes.slash
-  ) {
-    state.pos++;
-    if (state.pos > input.length) {
-      unexpected("Unterminated comment", state.pos - 2);
-      return;
-    }
+  const end = input.indexOf("*/", state.pos);
+  if (end === -1) {
+    state.pos = input.length + 1;
+    unexpected("Unterminated comment", state.pos - 2);
+    return;
   }
-  state.pos += 2;
+  state.pos = end + 2;
 }
 
 export function skipLineComment(startSkip: number): void {
-  let ch = input.charCodeAt((state.pos += startSkip));
-  if (state.pos < input.length) {
-    while (
-      ch !== charCodes.lineFeed &&
-      ch !== charCodes.carriageReturn &&
-      ch !== charCodes.lineSeparator &&
-      ch !== charCodes.paragraphSeparator &&
-      ++state.pos < input.length
-    ) {
-      ch = input.charCodeAt(state.pos);
-    }
-  }
+  state.pos = findLineBreakIndex(state.pos + startSkip);
 }
 
 // Called at the start of the parse and after every token. Skips
@@ -369,6 +443,66 @@ export function skipSpace(): void {
         }
     }
   }
+}
+
+function skipWhiteSpaceFrom(pos: number): number {
+  while (pos < input.length) {
+    const ch = input.charCodeAt(pos);
+    switch (ch) {
+      case charCodes.carriageReturn:
+        if (input.charCodeAt(pos + 1) === charCodes.lineFeed) {
+          pos++;
+        }
+
+      case charCodes.lineFeed:
+      case charCodes.lineSeparator:
+      case charCodes.paragraphSeparator:
+        pos++;
+        break;
+
+      case charCodes.slash:
+        switch (input.charCodeAt(pos + 1)) {
+          case charCodes.asterisk: {
+            const commentStart = pos;
+            const commentEnd = input.indexOf("*/", pos + 2);
+            if (commentEnd === -1) {
+              return commentStart;
+            }
+            pos = commentEnd + 2;
+            break;
+          }
+
+          case charCodes.slash:
+            pos = findLineBreakIndex(pos + 2);
+            break;
+
+          default:
+            return pos;
+        }
+        break;
+
+      default:
+        if (IS_WHITESPACE[ch]) {
+          pos++;
+        } else {
+          return pos;
+        }
+    }
+  }
+  return pos;
+}
+
+function findLineBreakIndex(start: number): number {
+  let index = input.length;
+  const lineFeedIndex = input.indexOf(LINE_FEED, start);
+  if (lineFeedIndex !== -1 && lineFeedIndex < index) index = lineFeedIndex;
+  const carriageReturnIndex = input.indexOf(CARRIAGE_RETURN, start);
+  if (carriageReturnIndex !== -1 && carriageReturnIndex < index) index = carriageReturnIndex;
+  const lineSeparatorIndex = input.indexOf(LINE_SEPARATOR, start);
+  if (lineSeparatorIndex !== -1 && lineSeparatorIndex < index) index = lineSeparatorIndex;
+  const paragraphSeparatorIndex = input.indexOf(PARAGRAPH_SEPARATOR, start);
+  if (paragraphSeparatorIndex !== -1 && paragraphSeparatorIndex < index) index = paragraphSeparatorIndex;
+  return index;
 }
 
 // Called at the end of every token. Sets various fields, and skips the space after the token, so
@@ -807,33 +941,42 @@ function finishOp(type: TokenType, size: number): void {
 
 function readRegexp(): void {
   const start = state.pos;
-  let escaped = false;
   let inClass = false;
   for (;;) {
-    if (state.pos >= input.length) {
+    const specialIndex = nextRegexpSpecialIndex(state.pos, inClass);
+    if (specialIndex === input.length) {
+      state.pos = input.length;
       unexpected("Unterminated regular expression", start);
       return;
     }
-    const code = input.charCodeAt(state.pos);
-    if (escaped) {
-      escaped = false;
+    state.pos = specialIndex;
+    const code = input.charCodeAt(specialIndex);
+    if (code === charCodes.backslash) {
+      state.pos = specialIndex + 2;
+    } else if (code === charCodes.leftSquareBracket) {
+      inClass = true;
+      state.pos = specialIndex + 1;
+    } else if (code === charCodes.rightSquareBracket) {
+      inClass = false;
+      state.pos = specialIndex + 1;
     } else {
-      if (code === charCodes.leftSquareBracket) {
-        inClass = true;
-      } else if (code === charCodes.rightSquareBracket && inClass) {
-        inClass = false;
-      } else if (code === charCodes.slash && !inClass) {
-        break;
-      }
-      escaped = code === charCodes.backslash;
+      break;
     }
-    ++state.pos;
   }
   ++state.pos;
   // Need to use `skipWord` because '\uXXXX' sequences are allowed here (don't ask).
   skipWord();
 
   finishToken(tt.regexp);
+}
+
+function nextRegexpSpecialIndex(start: number, inClass: boolean): number {
+  const slashIndex = inClass ? -1 : input.indexOf("/", start);
+  let best = slashIndex === -1 ? input.length : slashIndex;
+  const slashEscapeIndex = input.indexOf("\\", start);
+  if (slashEscapeIndex !== -1 && slashEscapeIndex < best) best = slashEscapeIndex;
+  const bracketIndex = input.indexOf(inClass ? "]" : "[", start);
+  return bracketIndex !== -1 && bracketIndex < best ? bracketIndex : best;
 }
 
 /**
@@ -926,35 +1069,41 @@ function readNumber(startsWithDot: boolean): void {
 }
 
 function readString(quote: number): void {
-  state.pos++;
-  for (;;) {
-    if (state.pos >= input.length) {
-      unexpected("Unterminated string constant");
-      return;
-    }
-    const ch = input.charCodeAt(state.pos);
-    if (ch === charCodes.backslash) {
-      state.pos++;
-    } else if (ch === quote) {
-      break;
-    }
-    state.pos++;
+  const quoteChar = quote === charCodes.quotationMark ? QUOTATION_MARK : APOSTROPHE;
+  let quoteIndex = input.indexOf(quoteChar, state.pos + 1);
+  while (quoteIndex !== -1 && hasOddBackslashBefore(quoteIndex)) {
+    quoteIndex = input.indexOf(quoteChar, quoteIndex + 1);
   }
-  state.pos++;
+  if (quoteIndex === -1) {
+    unexpected("Unterminated string constant");
+    return;
+  }
+  state.pos = quoteIndex + 1;
   finishToken(tt.string);
+}
+
+function hasOddBackslashBefore(index: number): boolean {
+  let slashCount = 0;
+  while (input.charCodeAt(index - slashCount - 1) === charCodes.backslash) {
+    slashCount++;
+  }
+  return (slashCount & 1) === 1;
 }
 
 // Reads template string tokens.
 function readTmplToken(): void {
   for (;;) {
-    if (state.pos >= input.length) {
+    const specialIndex = nextTemplateSpecialIndex(state.pos);
+    if (specialIndex === input.length) {
+      state.pos = input.length;
       unexpected("Unterminated template");
       return;
     }
-    const ch = input.charCodeAt(state.pos);
+    state.pos = specialIndex;
+    const ch = input.charCodeAt(specialIndex);
     if (
       ch === charCodes.graveAccent ||
-      (ch === charCodes.dollarSign && input.charCodeAt(state.pos + 1) === charCodes.leftCurlyBrace)
+      (ch === charCodes.dollarSign && input.charCodeAt(specialIndex + 1) === charCodes.leftCurlyBrace)
     ) {
       if (state.pos === state.start && match(tt.template)) {
         if (ch === charCodes.dollarSign) {
@@ -971,34 +1120,50 @@ function readTmplToken(): void {
       return;
     }
     if (ch === charCodes.backslash) {
-      state.pos++;
+      state.pos = specialIndex + 2;
+    } else {
+      state.pos = specialIndex + 1;
     }
-    state.pos++;
   }
+}
+
+function nextTemplateSpecialIndex(start: number): number {
+  const quoteIndex = input.indexOf("`", start);
+  let best = quoteIndex === -1 ? input.length : quoteIndex;
+  const slashIndex = input.indexOf("\\", start);
+  if (slashIndex !== -1 && slashIndex < best) best = slashIndex;
+  let dollarIndex = input.indexOf("$", start);
+  while (dollarIndex !== -1 && dollarIndex < best) {
+    if (input.charCodeAt(dollarIndex + 1) === charCodes.leftCurlyBrace) {
+      return dollarIndex;
+    }
+    dollarIndex = input.indexOf("$", dollarIndex + 1);
+  }
+  return best;
 }
 
 // Skip to the end of the current word. Note that this is the same as the snippet at the end of
 // readWord, but calling skipWord from readWord seems to slightly hurt performance from some rough
 // measurements.
 export function skipWord(): void {
-  while (state.pos < input.length) {
-    const ch = input.charCodeAt(state.pos);
-    if (IS_IDENTIFIER_CHAR[ch]) {
-      state.pos++;
+  let pos = state.pos;
+  const inputLength = input.length;
+  while (pos < inputLength) {
+    const ch = input.charCodeAt(pos);
+    if (IS_IDENTIFIER_CHAR[ch] === 1) {
+      pos++;
     } else if (ch === charCodes.backslash) {
       // \u
-      state.pos += 2;
-      if (input.charCodeAt(state.pos) === charCodes.leftCurlyBrace) {
-        while (
-          state.pos < input.length &&
-          input.charCodeAt(state.pos) !== charCodes.rightCurlyBrace
-        ) {
-          state.pos++;
+      pos += 2;
+      if (input.charCodeAt(pos) === charCodes.leftCurlyBrace) {
+        while (pos < inputLength && input.charCodeAt(pos) !== charCodes.rightCurlyBrace) {
+          pos++;
         }
-        state.pos++;
+        pos++;
       }
     } else {
       break;
     }
   }
+  state.pos = pos;
 }

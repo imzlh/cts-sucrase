@@ -15,7 +15,8 @@ export default function readWord(): void {
   let treePos = 0;
   let code = 0;
   let pos = state.pos;
-  while (pos < input.length) {
+  const inputLength = input.length;
+  while (pos < inputLength) {
     code = input.charCodeAt(pos);
     if (code < charCodes.lowercaseA || code > charCodes.lowercaseZ) {
       break;
@@ -30,7 +31,10 @@ export default function readWord(): void {
   }
 
   const keywordValue = READ_WORD_TREE[treePos];
-  if (keywordValue > -1 && !IS_IDENTIFIER_CHAR[code]) {
+  if (keywordValue > -1 && (
+    pos >= inputLength ||
+    IS_IDENTIFIER_CHAR[code] !== 1
+  )) {
     state.pos = pos;
     if (keywordValue & 1) {
       finishToken(keywordValue >>> 1);
@@ -40,15 +44,15 @@ export default function readWord(): void {
     return;
   }
 
-  while (pos < input.length) {
+  while (pos < inputLength) {
     const ch = input.charCodeAt(pos);
-    if (IS_IDENTIFIER_CHAR[ch]) {
+    if (IS_IDENTIFIER_CHAR[ch] === 1) {
       pos++;
     } else if (ch === charCodes.backslash) {
       // \u
       pos += 2;
       if (input.charCodeAt(pos) === charCodes.leftCurlyBrace) {
-        while (pos < input.length && input.charCodeAt(pos) !== charCodes.rightCurlyBrace) {
+        while (pos < inputLength && input.charCodeAt(pos) !== charCodes.rightCurlyBrace) {
           pos++;
         }
         pos++;

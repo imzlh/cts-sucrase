@@ -25,9 +25,7 @@ export const WHITESPACE_CHARS: Array<number> = [
   0xfeff, // ZERO WIDTH NO-BREAK SPACE
 ];
 
-export const skipWhiteSpace = /(?:\s|\/\/.*|\/\*[^]*?\*\/)*/g;
-
 export const IS_WHITESPACE = new Uint8Array(65536);
-for (const char of WHITESPACE_CHARS) {
-  IS_WHITESPACE[char] = 1;
+for (let i = 0; i < WHITESPACE_CHARS.length; i++) {
+  IS_WHITESPACE[WHITESPACE_CHARS[i]] = 1;
 }

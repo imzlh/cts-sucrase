@@ -1,6 +1,8 @@
+import type {Token} from "../parser/tokenizer";
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
-import getImportExportSpecifierInfo from "./getImportExportSpecifierInfo";
+
+const EMPTY_IMPORTED_NAMES: Array<string> = [];
 
 /**
  * Special case code to scan for imported names in ESM TypeScript. We need to do this so we can
@@ -9,76 +11,107 @@ import getImportExportSpecifierInfo from "./getImportExportSpecifierInfo";
  * This is similar to logic in CJSImportProcessor, but trimmed down to avoid logic with CJS
  * replacement and flow type imports.
  */
-export default function getTSImportedNames(tokens: TokenProcessor): Set<string> {
-  const importedNames = new Set<string>();
-  for (let i = 0; i < tokens.tokens.length; i++) {
+export default function getTSImportedNames(tokens: TokenProcessor): Array<string> {
+  let importedNames: Array<string> | null = null;
+  const tokenList = tokens.tokens;
+  for (let i = 0; i < tokenList.length; i++) {
     if (
-      tokens.matches1AtIndex(i, tt._import) &&
-      !tokens.matches3AtIndex(i, tt._import, tt.name, tt.eq)
+      tokenList[i].type === tt._import &&
+      !(tokenList[i + 1].type === tt.name && tokenList[i + 2].type === tt.eq)
     ) {
-      collectNamesForImport(tokens, i, importedNames);
+      importedNames = collectNamesForImport(tokens, tokenList, i, importedNames);
     }
   }
-  return importedNames;
+  return importedNames ?? EMPTY_IMPORTED_NAMES;
 }
 
 function collectNamesForImport(
   tokens: TokenProcessor,
+  tokenList: Token[],
   index: number,
-  importedNames: Set<string>,
-): void {
+  importedNames: Array<string> | null,
+): Array<string> | null {
   index++;
 
-  if (tokens.matches1AtIndex(index, tt.parenL)) {
+  if (tokenList[index].type === tt.parenL) {
     // Dynamic import, so nothing to do
-    return;
+    return importedNames;
   }
 
-  if (tokens.matches1AtIndex(index, tt.name)) {
-    importedNames.add(tokens.identifierNameAtIndex(index));
+  if (tokenList[index].type === tt.name) {
+    importedNames = appendImportedName(importedNames, tokens.identifierNameForToken(tokenList[index]));
     index++;
-    if (tokens.matches1AtIndex(index, tt.comma)) {
+    if (tokenList[index].type === tt.comma) {
       index++;
     }
   }
 
-  if (tokens.matches1AtIndex(index, tt.star)) {
+  if (tokenList[index].type === tt.star) {
     // * as
     index += 2;
-    importedNames.add(tokens.identifierNameAtIndex(index));
+    importedNames = appendImportedName(importedNames, tokens.identifierNameForToken(tokenList[index]));
     index++;
   }
 
-  if (tokens.matches1AtIndex(index, tt.braceL)) {
+  if (tokenList[index].type === tt.braceL) {
     index++;
-    collectNamesForNamedImport(tokens, index, importedNames);
+    importedNames = collectNamesForNamedImport(tokens, tokenList, index, importedNames);
   }
+  return importedNames;
 }
 
 function collectNamesForNamedImport(
   tokens: TokenProcessor,
+  tokenList: Token[],
   index: number,
-  importedNames: Set<string>,
-): void {
+  importedNames: Array<string> | null,
+): Array<string> | null {
   while (true) {
-    if (tokens.matches1AtIndex(index, tt.braceR)) {
-      return;
+    if (tokenList[index].type === tt.braceR) {
+      return importedNames;
     }
 
-    const specifierInfo = getImportExportSpecifierInfo(tokens, index);
-    index = specifierInfo.endIndex;
-    if (!specifierInfo.isType) {
-      importedNames.add(specifierInfo.rightName);
+    let endIndex = index + 1;
+    let endTokenType = tokenList[endIndex].type;
+    if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+      importedNames = appendImportedName(importedNames, tokens.identifierNameForToken(tokenList[index]));
+    } else {
+      endIndex++;
+      endTokenType = tokenList[endIndex].type;
+      if (endTokenType !== tt.braceR && endTokenType !== tt.comma) {
+        endIndex++;
+        endTokenType = tokenList[endIndex].type;
+        if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+          importedNames = appendImportedName(
+            importedNames,
+            tokens.identifierNameForToken(tokenList[index + 2]),
+          );
+        } else {
+          endIndex++;
+          endTokenType = tokenList[endIndex].type;
+          if (endTokenType !== tt.braceR && endTokenType !== tt.comma) {
+            throw new Error(`Unexpected import specifier at ${index}`);
+          }
+        }
+      }
     }
+    index = endIndex;
 
-    if (tokens.matches2AtIndex(index, tt.comma, tt.braceR)) {
-      return;
-    } else if (tokens.matches1AtIndex(index, tt.braceR)) {
-      return;
-    } else if (tokens.matches1AtIndex(index, tt.comma)) {
+    const separatorType = tokenList[index].type;
+    if (separatorType === tt.comma && tokenList[index + 1].type === tt.braceR) {
+      return importedNames;
+    } else if (separatorType === tt.braceR) {
+      return importedNames;
+    } else if (separatorType === tt.comma) {
       index++;
     } else {
-      throw new Error(`Unexpected token: ${JSON.stringify(tokens.tokens[index])}`);
+      throw new Error(`Unexpected token: ${JSON.stringify(tokenList[index])}`);
     }
   }
+}
+
+function appendImportedName(importedNames: Array<string> | null, name: string): Array<string> {
+  const names = importedNames ?? [];
+  names[names.length] = name;
+  return names;
 }

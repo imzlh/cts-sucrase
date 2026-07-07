@@ -5,10 +5,9 @@ import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
 
 const JEST_GLOBAL_NAME = "jest";
-const HOISTED_METHODS = ["mock", "unmock", "enableAutomock", "disableAutomock"];
 
 export default class JestHoistTransformer extends Transformer {
-  private readonly hoistedFunctionNames: Array<string> = [];
+  private hoistedCode = "";
 
   constructor(
     readonly rootTransformer: RootTransformer,
@@ -31,10 +30,7 @@ export default class JestHoistTransformer extends Transformer {
   }
 
   getHoistedCode(): string {
-    if (this.hoistedFunctionNames.length > 0) {
-      return this.hoistedFunctionNames.map((name) => `${name}();`).join("");
-    }
-    return "";
+    return this.hoistedCode;
   }
 
   private extractHoistedCalls(): boolean {
@@ -43,10 +39,9 @@ export default class JestHoistTransformer extends Transformer {
 
     while (this.tokens.matches3(tt.dot, tt.name, tt.parenL)) {
       const methodName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 1);
-      const shouldHoist = HOISTED_METHODS.includes(methodName);
-      if (shouldHoist) {
+      if (isHoistedJestMethod(methodName)) {
         const hoistedFunctionName = this.nameManager.claimFreeName("__jestHoist");
-        this.hoistedFunctionNames.push(hoistedFunctionName);
+        this.hoistedCode += `${hoistedFunctionName}();`;
         this.tokens.replaceToken(`function ${hoistedFunctionName}(){${JEST_GLOBAL_NAME}.`);
         this.tokens.copyToken();
         this.tokens.copyToken();
@@ -69,5 +64,17 @@ export default class JestHoistTransformer extends Transformer {
     }
 
     return true;
+  }
+}
+
+function isHoistedJestMethod(methodName: string): boolean {
+  switch (methodName) {
+    case "mock":
+    case "unmock":
+    case "enableAutomock":
+    case "disableAutomock":
+      return true;
+    default:
+      return false;
   }
 }

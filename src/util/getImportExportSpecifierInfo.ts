@@ -1,19 +1,12 @@
 import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
 
-export type ImportExportSpecifierInfo =
-  | {
-      isType: false;
-      leftName: string;
-      rightName: string;
-      endIndex: number;
-    }
-  | {
-      isType: true;
-      leftName: null;
-      rightName: null;
-      endIndex: number;
-    };
+export interface ImportExportSpecifierInfo {
+  isType: boolean;
+  leftName: string | null;
+  rightName: string | null;
+  endIndex: number;
+}
 
 /**
  * Determine information about this named import or named export specifier.
@@ -42,51 +35,60 @@ export default function getImportExportSpecifierInfo(
   tokens: TokenProcessor,
   index: number = tokens.currentIndex(),
 ): ImportExportSpecifierInfo {
-  let endIndex = index + 1;
-  if (isSpecifierEnd(tokens, endIndex)) {
-    // import {A}
-    const name = tokens.identifierNameAtIndex(index);
-    return {
-      isType: false,
-      leftName: name,
-      rightName: name,
-      endIndex,
-    };
-  }
-  endIndex++;
-  if (isSpecifierEnd(tokens, endIndex)) {
-    // import {type A}
-    return {
-      isType: true,
-      leftName: null,
-      rightName: null,
-      endIndex,
-    };
-  }
-  endIndex++;
-  if (isSpecifierEnd(tokens, endIndex)) {
-    // import {A as B}
-    return {
-      isType: false,
-      leftName: tokens.identifierNameAtIndex(index),
-      rightName: tokens.identifierNameAtIndex(index + 2),
-      endIndex,
-    };
-  }
-  endIndex++;
-  if (isSpecifierEnd(tokens, endIndex)) {
-    // import {type A as B}
-    return {
-      isType: true,
-      leftName: null,
-      rightName: null,
-      endIndex,
-    };
-  }
-  throw new Error(`Unexpected import/export specifier at ${index}`);
+  return readImportExportSpecifierInfo(tokens, {
+    isType: false,
+    leftName: null,
+    rightName: null,
+    endIndex: 0,
+  }, index);
 }
 
-function isSpecifierEnd(tokens: TokenProcessor, index: number): boolean {
-  const token = tokens.tokens[index];
-  return token.type === tt.braceR || token.type === tt.comma;
+export function readImportExportSpecifierInfo(
+  tokens: TokenProcessor,
+  out: ImportExportSpecifierInfo,
+  index: number = tokens.currentIndex(),
+): ImportExportSpecifierInfo {
+  const tokenList = tokens.tokens;
+  let endIndex = index + 1;
+  let endTokenType = tokenList[endIndex].type;
+  if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+    // import {A}
+    const name = tokens.identifierNameForToken(tokenList[index]);
+    out.isType = false;
+    out.leftName = name;
+    out.rightName = name;
+    out.endIndex = endIndex;
+    return out;
+  }
+  endIndex++;
+  endTokenType = tokenList[endIndex].type;
+  if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+    // import {type A}
+    out.isType = true;
+    out.leftName = null;
+    out.rightName = null;
+    out.endIndex = endIndex;
+    return out;
+  }
+  endIndex++;
+  endTokenType = tokenList[endIndex].type;
+  if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+    // import {A as B}
+    out.isType = false;
+    out.leftName = tokens.identifierNameForToken(tokenList[index]);
+    out.rightName = tokens.identifierNameForToken(tokenList[index + 2]);
+    out.endIndex = endIndex;
+    return out;
+  }
+  endIndex++;
+  endTokenType = tokenList[endIndex].type;
+  if (endTokenType === tt.braceR || endTokenType === tt.comma) {
+    // import {type A as B}
+    out.isType = true;
+    out.leftName = null;
+    out.rightName = null;
+    out.endIndex = endIndex;
+    return out;
+  }
+  throw new Error(`Unexpected import/export specifier at ${index}`);
 }

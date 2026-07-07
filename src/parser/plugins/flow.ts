@@ -12,7 +12,7 @@ import {
 } from "../tokenizer/index";
 import {ContextualKeyword} from "../tokenizer/keywords";
 import {TokenType, TokenType as tt} from "../tokenizer/types";
-import {input, state} from "../traverser/base";
+import {input, restoreParserState, state} from "../traverser/base";
 import {
   baseParseMaybeAssign,
   baseParseSubscript,
@@ -738,12 +738,38 @@ export function flowParseSubscript(
     parseCallExpressionArguments();
     return;
   } else if (!noCalls && match(tt.lessThan)) {
-    const snapshot = state.snapshot();
+    const savedPotentialArrowAt = state.potentialArrowAt;
+    const savedNoAnonFunctionType = state.noAnonFunctionType;
+    const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const savedTokensLength = state.tokens.length;
+    const savedScopesLength = state.scopes.length;
+    const savedPos = state.pos;
+    const savedType = state.type;
+    const savedContextualKeyword = state.contextualKeyword;
+    const savedStart = state.start;
+    const savedEnd = state.end;
+    const savedIsType = state.isType;
+    const savedScopeDepth = state.scopeDepth;
+    const savedError = state.error;
     flowParseTypeParameterInstantiation();
     expect(tt.parenL);
     parseCallExpressionArguments();
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
     } else {
       return;
     }
@@ -753,10 +779,36 @@ export function flowParseSubscript(
 
 export function flowStartParseNewArguments(): void {
   if (match(tt.lessThan)) {
-    const snapshot = state.snapshot();
+    const savedPotentialArrowAt = state.potentialArrowAt;
+    const savedNoAnonFunctionType = state.noAnonFunctionType;
+    const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const savedTokensLength = state.tokens.length;
+    const savedScopesLength = state.scopes.length;
+    const savedPos = state.pos;
+    const savedType = state.type;
+    const savedContextualKeyword = state.contextualKeyword;
+    const savedStart = state.start;
+    const savedEnd = state.end;
+    const savedIsType = state.isType;
+    const savedScopeDepth = state.scopeDepth;
+    const savedError = state.error;
     flowParseTypeParameterInstantiation();
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
     }
   }
 }
@@ -996,10 +1048,36 @@ export function flowStartParseAsyncArrowFromCallExpression(): void {
 // 3. This is neither. Just call the super method
 export function flowParseMaybeAssign(noIn: boolean, isWithinParens: boolean): boolean {
   if (match(tt.lessThan)) {
-    const snapshot = state.snapshot();
+    const savedPotentialArrowAt = state.potentialArrowAt;
+    const savedNoAnonFunctionType = state.noAnonFunctionType;
+    const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const savedTokensLength = state.tokens.length;
+    const savedScopesLength = state.scopes.length;
+    const savedPos = state.pos;
+    const savedType = state.type;
+    const savedContextualKeyword = state.contextualKeyword;
+    const savedStart = state.start;
+    const savedEnd = state.end;
+    const savedIsType = state.isType;
+    const savedScopeDepth = state.scopeDepth;
+    const savedError = state.error;
     let wasArrow = baseParseMaybeAssign(noIn, isWithinParens);
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
       state.type = tt.typeParameterStart;
     } else {
       return wasArrow;
@@ -1022,7 +1100,19 @@ export function flowParseMaybeAssign(noIn: boolean, isWithinParens: boolean): bo
 export function flowParseArrow(): boolean {
   if (match(tt.colon)) {
     const oldIsType = pushTypeContext(0);
-    const snapshot = state.snapshot();
+    const savedPotentialArrowAt = state.potentialArrowAt;
+    const savedNoAnonFunctionType = state.noAnonFunctionType;
+    const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const savedTokensLength = state.tokens.length;
+    const savedScopesLength = state.scopes.length;
+    const savedPos = state.pos;
+    const savedType = state.type;
+    const savedContextualKeyword = state.contextualKeyword;
+    const savedStart = state.start;
+    const savedEnd = state.end;
+    const savedIsType = state.isType;
+    const savedScopeDepth = state.scopeDepth;
+    const savedError = state.error;
 
     const oldNoAnonFunctionType = state.noAnonFunctionType;
     state.noAnonFunctionType = true;
@@ -1033,7 +1123,21 @@ export function flowParseArrow(): boolean {
     if (!match(tt.arrow)) unexpected();
 
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      restoreParserState(
+        savedPotentialArrowAt,
+        savedNoAnonFunctionType,
+        savedInDisallowConditionalTypesContext,
+        savedTokensLength,
+        savedScopesLength,
+        savedPos,
+        savedType,
+        savedContextualKeyword,
+        savedStart,
+        savedEnd,
+        savedIsType,
+        savedScopeDepth,
+        savedError,
+      );
     }
     popTypeContext(oldIsType);
   }
@@ -1045,12 +1149,38 @@ export function flowParseSubscripts(startTokenIndex: number, noCalls: boolean = 
     state.tokens[state.tokens.length - 1].contextualKeyword === ContextualKeyword._async &&
     match(tt.lessThan)
   ) {
-    const snapshot = state.snapshot();
+    const savedPotentialArrowAt = state.potentialArrowAt;
+    const savedNoAnonFunctionType = state.noAnonFunctionType;
+    const savedInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const savedTokensLength = state.tokens.length;
+    const savedScopesLength = state.scopes.length;
+    const savedPos = state.pos;
+    const savedType = state.type;
+    const savedContextualKeyword = state.contextualKeyword;
+    const savedStart = state.start;
+    const savedEnd = state.end;
+    const savedIsType = state.isType;
+    const savedScopeDepth = state.scopeDepth;
+    const savedError = state.error;
     const wasArrow = parseAsyncArrowWithTypeParameters();
     if (wasArrow && !state.error) {
       return;
     }
-    state.restoreFromSnapshot(snapshot);
+    restoreParserState(
+      savedPotentialArrowAt,
+      savedNoAnonFunctionType,
+      savedInDisallowConditionalTypesContext,
+      savedTokensLength,
+      savedScopesLength,
+      savedPos,
+      savedType,
+      savedContextualKeyword,
+      savedStart,
+      savedEnd,
+      savedIsType,
+      savedScopeDepth,
+      savedError,
+    );
   }
 
   baseParseSubscripts(startTokenIndex, noCalls);

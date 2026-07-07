@@ -2,6 +2,7 @@ import {TokenType as tt} from "../parser/tokenizer/types";
 import type TokenProcessor from "../TokenProcessor";
 
 export default function elideImportEquals(tokens: TokenProcessor): void {
+  const tokenList = tokens.tokens;
   // import
   tokens.removeInitialToken();
   // name
@@ -11,7 +12,7 @@ export default function elideImportEquals(tokens: TokenProcessor): void {
   // name or require
   tokens.removeToken();
   // Handle either `import A = require('A')` or `import A = B.C.D`.
-  if (tokens.matches1(tt.parenL)) {
+  if (tokenList[tokens.currentIndex()].type === tt.parenL) {
     // (
     tokens.removeToken();
     // path string
@@ -19,7 +20,7 @@ export default function elideImportEquals(tokens: TokenProcessor): void {
     // )
     tokens.removeToken();
   } else {
-    while (tokens.matches1(tt.dot)) {
+    while (tokenList[tokens.currentIndex()].type === tt.dot) {
       // .
       tokens.removeToken();
       // name

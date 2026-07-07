@@ -1,4 +1,6 @@
 import State from "../tokenizer/state";
+import {ContextualKeyword} from "../tokenizer/keywords";
+import {type TokenType} from "../tokenizer/types";
 import {charCodes} from "../util/charcodes";
 
 export let isJSXEnabled: boolean;
@@ -10,6 +12,36 @@ export let nextContextId: number;
 
 export function getNextContextId(): number {
   return nextContextId++;
+}
+
+export function restoreParserState(
+  potentialArrowAt: number,
+  noAnonFunctionType: boolean,
+  inDisallowConditionalTypesContext: boolean,
+  tokensLength: number,
+  scopesLength: number,
+  pos: number,
+  type: TokenType,
+  contextualKeyword: ContextualKeyword,
+  start: number,
+  end: number,
+  isType: boolean,
+  scopeDepth: number,
+  error: Error | null,
+): void {
+  state.potentialArrowAt = potentialArrowAt;
+  state.noAnonFunctionType = noAnonFunctionType;
+  state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+  state.tokens.length = tokensLength;
+  state.scopes.length = scopesLength;
+  state.pos = pos;
+  state.type = type;
+  state.contextualKeyword = contextualKeyword;
+  state.start = start;
+  state.end = end;
+  state.isType = isType;
+  state.scopeDepth = scopeDepth;
+  state.error = error;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

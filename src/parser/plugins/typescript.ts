@@ -76,7 +76,19 @@ function tsNextTokenCanFollowModifier(): boolean {
   // more things are considered modifiers there.
   // This implementation only handles modifiers not handled by babylon itself. And "static".
   // TODO: Would be nice to avoid lookahead. Want a hasLineBreakUpNext() method...
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
 
   next();
   const canFollowModifier =
@@ -91,14 +103,68 @@ function tsNextTokenCanFollowModifier(): boolean {
   if (canFollowModifier) {
     return true;
   } else {
-    state.restoreFromSnapshot(snapshot);
+    state.potentialArrowAt = potentialArrowAt;
+    state.noAnonFunctionType = noAnonFunctionType;
+    state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+    state.tokens.length = tokensLength;
+    state.scopes.length = scopesLength;
+    state.pos = pos;
+    state.type = type;
+    state.contextualKeyword = contextualKeyword;
+    state.start = start;
+    state.end = end;
+    state.isType = isType;
+    state.scopeDepth = scopeDepth;
+    state.error = error;
     return false;
   }
 }
 
-export function tsParseModifiers(allowedModifiers: Array<ContextualKeyword>): void {
+const TS_MODIFIER_ABSTRACT = 1;
+const TS_MODIFIER_DECLARE = 2;
+const TS_MODIFIER_OVERRIDE = 4;
+const TS_MODIFIER_PRIVATE = 8;
+const TS_MODIFIER_PROTECTED = 16;
+const TS_MODIFIER_PUBLIC = 32;
+export const TS_MODIFIER_READONLY = 64;
+const TS_MODIFIER_STATIC = 128;
+
+export const TS_ACCESS_MODIFIER_MASK =
+  TS_MODIFIER_PUBLIC | TS_MODIFIER_PROTECTED | TS_MODIFIER_PRIVATE | TS_MODIFIER_OVERRIDE;
+export const TS_CLASS_MEMBER_MODIFIER_MASK =
+  TS_MODIFIER_DECLARE | TS_ACCESS_MODIFIER_MASK;
+export const TS_ASSIGNABLE_MODIFIER_MASK =
+  TS_ACCESS_MODIFIER_MASK | TS_MODIFIER_READONLY;
+const TS_TYPE_CLASS_MEMBER_MODIFIER_MASK =
+  TS_MODIFIER_ABSTRACT | TS_MODIFIER_READONLY | TS_MODIFIER_DECLARE |
+  TS_MODIFIER_STATIC | TS_MODIFIER_OVERRIDE;
+
+function tsModifierFlag(modifier: ContextualKeyword): number {
+  switch (modifier) {
+    case ContextualKeyword._abstract:
+      return TS_MODIFIER_ABSTRACT;
+    case ContextualKeyword._declare:
+      return TS_MODIFIER_DECLARE;
+    case ContextualKeyword._override:
+      return TS_MODIFIER_OVERRIDE;
+    case ContextualKeyword._private:
+      return TS_MODIFIER_PRIVATE;
+    case ContextualKeyword._protected:
+      return TS_MODIFIER_PROTECTED;
+    case ContextualKeyword._public:
+      return TS_MODIFIER_PUBLIC;
+    case ContextualKeyword._readonly:
+      return TS_MODIFIER_READONLY;
+    case ContextualKeyword._static:
+      return TS_MODIFIER_STATIC;
+    default:
+      return 0;
+  }
+}
+
+export function tsParseModifiers(allowedModifierMask: number): void {
   while (true) {
-    const modifier = tsParseModifier(allowedModifiers);
+    const modifier = tsParseModifier(allowedModifierMask);
     if (modifier === null) {
       break;
     }
@@ -107,14 +173,14 @@ export function tsParseModifiers(allowedModifiers: Array<ContextualKeyword>): vo
 
 /** Parses a modifier matching one the given modifier names. */
 export function tsParseModifier(
-  allowedModifiers: Array<ContextualKeyword>,
+  allowedModifierMask: number,
 ): ContextualKeyword | null {
   if (!match(tt.name)) {
     return null;
   }
 
   const modifier = state.contextualKeyword;
-  if (allowedModifiers.indexOf(modifier) !== -1 && tsNextTokenCanFollowModifier()) {
+  if ((allowedModifierMask & tsModifierFlag(modifier)) !== 0 && tsNextTokenCanFollowModifier()) {
     switch (modifier) {
       case ContextualKeyword._readonly:
         state.tokens[state.tokens.length - 1].type = tt._readonly;
@@ -273,10 +339,34 @@ function tsParseSignatureMember(): void {
 }
 
 function tsIsUnambiguouslyIndexSignature(): boolean {
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   next(); // Skip '{'
   const isIndexSignature = eat(tt.name) && match(tt.colon);
-  state.restoreFromSnapshot(snapshot);
+  state.potentialArrowAt = potentialArrowAt;
+  state.noAnonFunctionType = noAnonFunctionType;
+  state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+  state.tokens.length = tokensLength;
+  state.scopes.length = scopesLength;
+  state.pos = pos;
+  state.type = type;
+  state.contextualKeyword = contextualKeyword;
+  state.start = start;
+  state.end = end;
+  state.isType = isType;
+  state.scopeDepth = scopeDepth;
+  state.error = error;
   return isIndexSignature;
 }
 
@@ -327,7 +417,7 @@ function tsParseTypeMember(): void {
     }
     return;
   }
-  const readonly = !!tsParseModifier([ContextualKeyword._readonly]);
+  const readonly = !!tsParseModifier(TS_MODIFIER_READONLY);
 
   const found = tsTryParseIndexSignature();
   if (found) {
@@ -356,9 +446,33 @@ function tsParseObjectTypeMembers(): void {
 }
 
 function tsLookaheadIsStartOfMappedType(): boolean {
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   const isStartOfMappedType = tsIsStartOfMappedType();
-  state.restoreFromSnapshot(snapshot);
+  state.potentialArrowAt = potentialArrowAt;
+  state.noAnonFunctionType = noAnonFunctionType;
+  state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+  state.tokens.length = tokensLength;
+  state.scopes.length = scopesLength;
+  state.pos = pos;
+  state.type = type;
+  state.contextualKeyword = contextualKeyword;
+  state.start = start;
+  state.end = end;
+  state.isType = isType;
+  state.scopeDepth = scopeDepth;
+  state.error = error;
   return isStartOfMappedType;
 }
 
@@ -558,14 +672,38 @@ function tsParseInferType(): void {
   if (match(tt._extends)) {
     // Infer type constraints introduce an ambiguity about whether the "extends"
     // is a constraint for this infer type or is another conditional type.
-    const snapshot = state.snapshot();
+    const potentialArrowAt = state.potentialArrowAt;
+    const noAnonFunctionType = state.noAnonFunctionType;
+    const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const tokensLength = state.tokens.length;
+    const scopesLength = state.scopes.length;
+    const pos = state.pos;
+    const type = state.type;
+    const contextualKeyword = state.contextualKeyword;
+    const start = state.start;
+    const end = state.end;
+    const isType = state.isType;
+    const scopeDepth = state.scopeDepth;
+    const error = state.error;
     expect(tt._extends);
     const oldInDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
     state.inDisallowConditionalTypesContext = true;
     tsParseType();
     state.inDisallowConditionalTypesContext = oldInDisallowConditionalTypesContext;
     if (state.error || (!state.inDisallowConditionalTypesContext && match(tt.question))) {
-      state.restoreFromSnapshot(snapshot);
+      state.potentialArrowAt = potentialArrowAt;
+      state.noAnonFunctionType = noAnonFunctionType;
+      state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+      state.tokens.length = tokensLength;
+      state.scopes.length = scopesLength;
+      state.pos = pos;
+      state.type = type;
+      state.contextualKeyword = contextualKeyword;
+      state.start = start;
+      state.end = end;
+      state.isType = isType;
+      state.scopeDepth = scopeDepth;
+      state.error = error;
     }
   }
 }
@@ -639,9 +777,33 @@ function tsSkipParameterStart(): boolean {
 }
 
 function tsLookaheadIsUnambiguouslyStartOfFunctionType(): boolean {
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   const isUnambiguouslyStartOfFunctionType = tsIsUnambiguouslyStartOfFunctionType();
-  state.restoreFromSnapshot(snapshot);
+  state.potentialArrowAt = potentialArrowAt;
+  state.noAnonFunctionType = noAnonFunctionType;
+  state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+  state.tokens.length = tokensLength;
+  state.scopes.length = scopesLength;
+  state.pos = pos;
+  state.type = type;
+  state.contextualKeyword = contextualKeyword;
+  state.start = start;
+  state.end = end;
+  state.isType = isType;
+  state.scopeDepth = scopeDepth;
+  state.error = error;
   return isUnambiguouslyStartOfFunctionType;
 }
 
@@ -706,7 +868,19 @@ function tsTryParseType(): void {
  * Returns true if we parsed the return type, false if there's still a type to be parsed.
  */
 function tsParseTypePredicateOrAssertsPrefix(): boolean {
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   if (isContextual(ContextualKeyword._asserts)) {
     // Normally this is `asserts x is T`, but at this point, it might be `asserts is T` (a user-
     // defined type guard on the `asserts` variable) or just a type called `asserts`.
@@ -725,7 +899,19 @@ function tsParseTypePredicateOrAssertsPrefix(): boolean {
       return true;
     } else {
       // Regular type, so bail out and start type parsing from scratch.
-      state.restoreFromSnapshot(snapshot);
+      state.potentialArrowAt = potentialArrowAt;
+      state.noAnonFunctionType = noAnonFunctionType;
+      state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+      state.tokens.length = tokensLength;
+      state.scopes.length = scopesLength;
+      state.pos = pos;
+      state.type = type;
+      state.contextualKeyword = contextualKeyword;
+      state.start = start;
+      state.end = end;
+      state.isType = isType;
+      state.scopeDepth = scopeDepth;
+      state.error = error;
       return false;
     }
   } else if (tsIsIdentifier() || match(tt._this)) {
@@ -737,7 +923,19 @@ function tsParseTypePredicateOrAssertsPrefix(): boolean {
       return true;
     } else {
       // Regular type, so bail out and start type parsing from scratch.
-      state.restoreFromSnapshot(snapshot);
+      state.potentialArrowAt = potentialArrowAt;
+      state.noAnonFunctionType = noAnonFunctionType;
+      state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+      state.tokens.length = tokensLength;
+      state.scopes.length = scopesLength;
+      state.pos = pos;
+      state.type = type;
+      state.contextualKeyword = contextualKeyword;
+      state.start = start;
+      state.end = end;
+      state.isType = isType;
+      state.scopeDepth = scopeDepth;
+      state.error = error;
       return false;
     }
   }
@@ -1118,7 +1316,19 @@ function tsCheckLineTerminator(isBeforeToken: boolean): boolean {
 
 // Returns true if there was a generic async arrow function.
 function tsTryParseGenericAsyncArrowFunction(): boolean {
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
 
   tsParseTypeParameters();
   parseFunctionParams();
@@ -1126,7 +1336,19 @@ function tsTryParseGenericAsyncArrowFunction(): boolean {
   expect(tt.arrow);
 
   if (state.error) {
-    state.restoreFromSnapshot(snapshot);
+    state.potentialArrowAt = potentialArrowAt;
+    state.noAnonFunctionType = noAnonFunctionType;
+    state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+    state.tokens.length = tokensLength;
+    state.scopes.length = scopesLength;
+    state.pos = pos;
+    state.type = type;
+    state.contextualKeyword = contextualKeyword;
+    state.start = start;
+    state.end = end;
+    state.isType = isType;
+    state.scopeDepth = scopeDepth;
+    state.error = error;
     return false;
   }
 
@@ -1239,7 +1461,19 @@ export function tsParseSubscript(
   if (match(tt.lessThan) || match(tt.bitShiftL)) {
     // There are number of things we are going to "maybe" parse, like type arguments on
     // tagged template expressions. If any of them fail, walk it back and continue.
-    const snapshot = state.snapshot();
+    const potentialArrowAt = state.potentialArrowAt;
+    const noAnonFunctionType = state.noAnonFunctionType;
+    const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const tokensLength = state.tokens.length;
+    const scopesLength = state.scopes.length;
+    const pos = state.pos;
+    const type = state.type;
+    const contextualKeyword = state.contextualKeyword;
+    const start = state.start;
+    const end = state.end;
+    const isType = state.isType;
+    const scopeDepth = state.scopeDepth;
+    const error = state.error;
 
     if (!noCalls && atPossibleAsync()) {
       // Almost certainly this is a generic async function `async <T>() => ...
@@ -1274,7 +1508,19 @@ export function tsParseSubscript(
     }
 
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      state.potentialArrowAt = potentialArrowAt;
+      state.noAnonFunctionType = noAnonFunctionType;
+      state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+      state.tokens.length = tokensLength;
+      state.scopes.length = scopesLength;
+      state.pos = pos;
+      state.type = type;
+      state.contextualKeyword = contextualKeyword;
+      state.start = start;
+      state.end = end;
+      state.isType = isType;
+      state.scopeDepth = scopeDepth;
+      state.error = error;
     } else {
       return;
     }
@@ -1438,13 +1684,7 @@ export function tsTryParseStatementContent(): boolean {
 
 export function tsTryParseClassMemberWithIsStatic(isStatic: boolean): boolean {
   const memberStartIndexAfterStatic = state.tokens.length;
-  tsParseModifiers([
-    ContextualKeyword._abstract,
-    ContextualKeyword._readonly,
-    ContextualKeyword._declare,
-    ContextualKeyword._static,
-    ContextualKeyword._override,
-  ]);
+  tsParseModifiers(TS_TYPE_CLASS_MEMBER_MODIFIER_MASK);
 
   const modifiersEndIndex = state.tokens.length;
   const found = tsTryParseIndexSignature();
@@ -1555,10 +1795,34 @@ export function tsParseMaybeAssignWithJSX(noIn: boolean, isWithinParens: boolean
   }
 
   // Prefer to parse JSX if possible. But may be an arrow fn.
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   let wasArrow = baseParseMaybeAssign(noIn, isWithinParens);
   if (state.error) {
-    state.restoreFromSnapshot(snapshot);
+    state.potentialArrowAt = potentialArrowAt;
+    state.noAnonFunctionType = noAnonFunctionType;
+    state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+    state.tokens.length = tokensLength;
+    state.scopes.length = scopesLength;
+    state.pos = pos;
+    state.type = type;
+    state.contextualKeyword = contextualKeyword;
+    state.start = start;
+    state.end = end;
+    state.isType = isType;
+    state.scopeDepth = scopeDepth;
+    state.error = error;
   } else {
     return wasArrow;
   }
@@ -1580,7 +1844,19 @@ export function tsParseMaybeAssignWithoutJSX(noIn: boolean, isWithinParens: bool
     return baseParseMaybeAssign(noIn, isWithinParens);
   }
 
-  const snapshot = state.snapshot();
+  const potentialArrowAt = state.potentialArrowAt;
+  const noAnonFunctionType = state.noAnonFunctionType;
+  const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+  const tokensLength = state.tokens.length;
+  const scopesLength = state.scopes.length;
+  const pos = state.pos;
+  const type = state.type;
+  const contextualKeyword = state.contextualKeyword;
+  const start = state.start;
+  const end = state.end;
+  const isType = state.isType;
+  const scopeDepth = state.scopeDepth;
+  const error = state.error;
   // This is similar to TypeScript's `tryParseParenthesizedArrowFunctionExpression`.
   tsParseTypeParameters();
   const wasArrow = baseParseMaybeAssign(noIn, isWithinParens);
@@ -1588,7 +1864,19 @@ export function tsParseMaybeAssignWithoutJSX(noIn: boolean, isWithinParens: bool
     unexpected();
   }
   if (state.error) {
-    state.restoreFromSnapshot(snapshot);
+    state.potentialArrowAt = potentialArrowAt;
+    state.noAnonFunctionType = noAnonFunctionType;
+    state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+    state.tokens.length = tokensLength;
+    state.scopes.length = scopesLength;
+    state.pos = pos;
+    state.type = type;
+    state.contextualKeyword = contextualKeyword;
+    state.start = start;
+    state.end = end;
+    state.isType = isType;
+    state.scopeDepth = scopeDepth;
+    state.error = error;
   } else {
     return wasArrow;
   }
@@ -1603,14 +1891,38 @@ export function tsParseArrow(): boolean {
   if (match(tt.colon)) {
     // This is different from how the TS parser does it.
     // TS uses lookahead. Babylon parses it as a parenthesized expression and converts.
-    const snapshot = state.snapshot();
+    const potentialArrowAt = state.potentialArrowAt;
+    const noAnonFunctionType = state.noAnonFunctionType;
+    const inDisallowConditionalTypesContext = state.inDisallowConditionalTypesContext;
+    const tokensLength = state.tokens.length;
+    const scopesLength = state.scopes.length;
+    const pos = state.pos;
+    const type = state.type;
+    const contextualKeyword = state.contextualKeyword;
+    const start = state.start;
+    const end = state.end;
+    const isType = state.isType;
+    const scopeDepth = state.scopeDepth;
+    const error = state.error;
 
     tsParseTypeOrTypePredicateAnnotation(tt.colon);
     if (canInsertSemicolon()) unexpected();
     if (!match(tt.arrow)) unexpected();
 
     if (state.error) {
-      state.restoreFromSnapshot(snapshot);
+      state.potentialArrowAt = potentialArrowAt;
+      state.noAnonFunctionType = noAnonFunctionType;
+      state.inDisallowConditionalTypesContext = inDisallowConditionalTypesContext;
+      state.tokens.length = tokensLength;
+      state.scopes.length = scopesLength;
+      state.pos = pos;
+      state.type = type;
+      state.contextualKeyword = contextualKeyword;
+      state.start = start;
+      state.end = end;
+      state.isType = isType;
+      state.scopeDepth = scopeDepth;
+      state.error = error;
     }
   }
   return eat(tt.arrow);

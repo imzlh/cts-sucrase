@@ -1,43 +1,37 @@
 import type NameManager from "./NameManager";
 
-const HELPERS: {[name: string]: string} = {
-  require: `
-    import {createRequire as CREATE_REQUIRE_NAME} from "module";
-    const require = CREATE_REQUIRE_NAME(import.meta.url);
-  `,
-};
+const REQUIRE_HELPER = "require";
 
 export class HelperManager {
-  helperNames: {[baseName in keyof typeof HELPERS]?: string} = {};
+  helperNames: {require?: string} = {};
   createRequireName: string | null = null;
+  private hasHelperNames = false;
   constructor(readonly nameManager: NameManager) {}
 
-  getHelperName(baseName: keyof typeof HELPERS): string {
+  getHelperName(baseName: typeof REQUIRE_HELPER): string {
     let helperName = this.helperNames[baseName];
     if (helperName) {
       return helperName;
     }
     helperName = this.nameManager.claimFreeName(`_${baseName}`);
     this.helperNames[baseName] = helperName;
+    this.hasHelperNames = true;
     return helperName;
   }
 
   emitHelpers(): string {
-    let resultCode = "";
-    for (const [baseName, helperCodeTemplate] of Object.entries(HELPERS)) {
-      const helperName = this.helperNames[baseName];
-      let helperCode = helperCodeTemplate;
-      if (baseName === "require") {
-        if (this.createRequireName === null) {
-          this.createRequireName = this.nameManager.claimFreeName("_createRequire");
-        }
-        helperCode = helperCode.replace(/CREATE_REQUIRE_NAME/g, this.createRequireName);
-      }
-      if (helperName) {
-        resultCode += " ";
-        resultCode += helperCode.replace(baseName, helperName).replace(/\s+/g, " ").trim();
-      }
+    if (!this.hasHelperNames) {
+      return "";
     }
-    return resultCode;
+    const requireName = this.helperNames.require;
+    if (!requireName) {
+      return "";
+    }
+    let createRequireName = this.createRequireName;
+    if (createRequireName === null) {
+      createRequireName = this.nameManager.claimFreeName("_createRequire");
+      this.createRequireName = createRequireName;
+    }
+    return ` import {createRequire as ${createRequireName}} from "module"; const ${requireName} = ${createRequireName}(import.meta.url);`;
   }
 }

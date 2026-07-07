@@ -47,22 +47,20 @@ const y = 2;`;
     });
   });
 
-  describe("using keyword transform", () => {
-    it("generates source map for using to const transformation", () => {
+  describe("using declarations", () => {
+    it("generates source map while preserving using", () => {
       const source = `using resource = getResource();`;
       const {code, mappings} = getSourceMap(source);
       
-      assert.ok(code.includes("const resource"));
+      assert.ok(code.includes("using resource"));
       assert.ok(mappings.length > 0);
     });
 
-    it("generates source map for await using transformation", () => {
+    it("generates source map while preserving await using", () => {
       const source = `await using resource = getResource();`;
       const {code, mappings} = getSourceMap(source);
-      console.log(code);
-      console.log(mappings);
       
-      assert.ok(code.includes("const resource"));
+      assert.ok(code.includes("await using resource"));
       assert.ok(mappings.length > 0);
     });
   });
@@ -105,13 +103,13 @@ const y = 2;`;
   describe("complex scenarios", () => {
     it("handles mixed code with using and type exports", () => {
       const source = `
-using resource = getResource();
+using resource: Resource = getResource();
 export interface IResult { value: number; }
 const x: number = 1;
 `;
       const {code, sourceMap, mappings} = getSourceMap(source);
       
-      assert.ok(code.includes("const resource"));
+      assert.ok(code.includes("using resource = getResource()"));
       assert.ok(code.includes("export const IResult = undefined"));
       assert.ok(code.includes("const x = 1"));
       assert.equal(sourceMap.version, 3);
