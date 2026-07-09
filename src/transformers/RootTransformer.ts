@@ -239,9 +239,11 @@ export default class RootTransformer {
       fields,
       instanceInitializerNames,
       rangesToRemove,
+      typeOnlyFieldEnds,
     } = classInfo;
     let fieldIndex = 0;
     let rangeToRemoveIndex = 0;
+    let typeOnlyFieldEndIndex = 0;
     const tokenList = this.tokens.tokens;
     const classContextId = tokenList[this.tokens.currentIndex()].contextId;
     if (classContextId == null) {
@@ -270,6 +272,17 @@ export default class RootTransformer {
 
     while (tokenList[this.tokens.currentIndex()].type !== tt.braceR ||
            tokenList[this.tokens.currentIndex()].contextId !== classContextId) {
+      // A stripped `!`/type annotation left this position as the boundary of a bare
+      // no-initializer field (see getClassInfo's typeOnlyFieldEnds). Insert the real
+      // terminator here, before whatever token comes next gets processed, so the field
+      // can't be parsed together with the next class element.
+      if (
+        typeOnlyFieldEndIndex < typeOnlyFieldEnds.length &&
+        this.tokens.currentIndex() === typeOnlyFieldEnds[typeOnlyFieldEndIndex]
+      ) {
+        this.tokens.appendCode(";");
+        typeOnlyFieldEndIndex++;
+      }
       if (fieldIndex < fields.length && this.tokens.currentIndex() === fields[fieldIndex].start) {
         let needsCloseBrace = false;
         const tokenType = tokenList[this.tokens.currentIndex()].type;

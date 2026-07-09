@@ -21,15 +21,20 @@ export default class FlowTransformer extends Transformer {
     ) {
       return true;
     }
-    if (this.tokens.matches1(tt._enum)) {
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    const tokenType = tokenList[tokenIndex].type;
+    const nextTokenType = tokenList[tokenIndex + 1].type;
+    const thirdTokenType = tokenList[tokenIndex + 2].type;
+    if (tokenType === tt._enum) {
       this.processEnum();
       return true;
     }
-    if (this.tokens.matches2(tt._export, tt._enum)) {
+    if (tokenType === tt._export && nextTokenType === tt._enum) {
       this.processNamedExportEnum();
       return true;
     }
-    if (this.tokens.matches3(tt._export, tt._default, tt._enum)) {
+    if (tokenType === tt._export && nextTokenType === tt._default && thirdTokenType === tt._enum) {
       this.processDefaultExportEnum();
       return true;
     }
@@ -130,25 +135,33 @@ export default class FlowTransformer extends Transformer {
     this.tokens.copyExpectedToken(tt.name);
 
     let isSymbolEnum = false;
-    if (this.tokens.matchesContextual(ContextualKeyword._of)) {
+    let token = this.tokens.tokens[this.tokens.currentIndex()];
+    if (token.type === tt.name && token.contextualKeyword === ContextualKeyword._of) {
       this.tokens.removeToken();
-      isSymbolEnum = this.tokens.matchesContextual(ContextualKeyword._symbol);
+      token = this.tokens.tokens[this.tokens.currentIndex()];
+      isSymbolEnum = token.type === tt.name && token.contextualKeyword === ContextualKeyword._symbol;
       this.tokens.removeToken();
     }
-    const hasInitializers = this.tokens.matches3(tt.braceL, tt.name, tt.eq);
+    const tokenList = this.tokens.tokens;
+    let tokenIndex = this.tokens.currentIndex();
+    const hasInitializers =
+      tokenList[tokenIndex].type === tt.braceL &&
+      tokenList[tokenIndex + 1].type === tt.name &&
+      tokenList[tokenIndex + 2].type === tt.eq;
     this.tokens.appendCode(' = require("flow-enums-runtime")');
 
     const isMirrored = !isSymbolEnum && !hasInitializers;
     this.tokens.replaceTokenTrimmingLeftWhitespace(isMirrored ? ".Mirrored([" : "({");
 
-    while (!this.tokens.matches1(tt.braceR)) {
+    while (tokenList[this.tokens.currentIndex()].type !== tt.braceR) {
       // ... is allowed at the end and has no runtime behavior.
-      if (this.tokens.matches1(tt.ellipsis)) {
+      tokenIndex = this.tokens.currentIndex();
+      if (tokenList[tokenIndex].type === tt.ellipsis) {
         this.tokens.removeToken();
         break;
       }
       this.processEnumElement(isSymbolEnum, hasInitializers);
-      if (this.tokens.matches1(tt.comma)) {
+      if (tokenList[this.tokens.currentIndex()].type === tt.comma) {
         this.tokens.copyToken();
       }
     }

@@ -39,11 +39,17 @@ export interface ClassInfo {
   constructorInsertPos: number | null;
   fields: Array<FieldInfo>;
   rangesToRemove: Array<TokenRange>;
+  // Token indices right after a no-initializer field whose `!` and/or type annotation we
+  // stripped while leaving the field itself as native syntax (disableESTransforms mode).
+  // processClassBody must insert an explicit `;` at each of these positions -- see the
+  // comment at the push site below for why.
+  typeOnlyFieldEnds: Array<number>;
 }
 
 const EMPTY_STRINGS: Array<string> = [];
 const EMPTY_FIELDS: Array<FieldInfo> = [];
 const EMPTY_RANGES: Array<TokenRange> = [];
+const EMPTY_INDICES: Array<number> = [];
 
 /**
  * Get information about the class fields for this class, given a token processor pointing to the
@@ -66,6 +72,7 @@ export default function getClassInfo(
   let constructorInsertPos = null;
   const fields: Array<FieldInfo> = disableESTransforms ? EMPTY_FIELDS : [];
   let rangesToRemove: Array<TokenRange> | null = null;
+  let typeOnlyFieldEnds: Array<number> | null = null;
 
   const tokenList = tokens.tokens;
   const classContextId = tokenList[tokens.currentIndex()].contextId;
@@ -145,6 +152,7 @@ export default function getClassInfo(
 
       const nameStartIndex = tokens.currentIndex();
       skipFieldName(tokens);
+      const nameEndIndex = tokens.currentIndex();
       let tokenType = tokenList[tokens.currentIndex()].type;
       if (tokenType === tt.lessThan || tokenType === tt.parenL) {
         // This is a method, so nothing to process.
@@ -196,6 +204,19 @@ export default function getClassInfo(
         if (!disableESTransforms || isDeclareOrAbstract) {
           const ranges = rangesToRemove ??= [];
           ranges[ranges.length] = {start: statementStartIndex, end: tokens.currentIndex()};
+        } else if (
+          (hasNonNull || tokens.currentIndex() !== nameEndIndex) &&
+          fieldToken.type !== tt.semi
+        ) {
+          // We stripped this field's `!` and/or type annotation but left the bare name as
+          // native syntax, relying on ASI to terminate it. That's unsafe when the name is
+          // itself a class-element keyword like `get`/`set`/`static`/`async`/`accessor`:
+          // the parser's lookahead for those isn't blocked by a line break, so e.g.
+          // `get!: X` next to `post!: Y` collapses to `get\npost\nput` and gets misread as
+          // `get post(...)` (a getter named "post") instead of two separate fields --
+          // exactly the "invalid property name" crash this fixes. Force real termination.
+          const ends = typeOnlyFieldEnds ??= [];
+          ends[ends.length] = tokens.currentIndex();
         }
       }
     }
@@ -213,6 +234,7 @@ export default function getClassInfo(
       constructorInsertPos,
       fields: EMPTY_FIELDS,
       rangesToRemove: rangesToRemove ?? EMPTY_RANGES,
+      typeOnlyFieldEnds: typeOnlyFieldEnds ?? EMPTY_INDICES,
     };
   } else {
     return {
@@ -223,6 +245,7 @@ export default function getClassInfo(
       constructorInsertPos,
       fields,
       rangesToRemove: rangesToRemove ?? EMPTY_RANGES,
+      typeOnlyFieldEnds: EMPTY_INDICES,
     };
   }
 }

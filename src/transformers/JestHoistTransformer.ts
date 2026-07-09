@@ -18,10 +18,16 @@ export default class JestHoistTransformer extends Transformer {
   }
 
   process(): boolean {
+    const tokenList = this.tokens.tokens;
+    const tokenIndex = this.tokens.currentIndex();
+    const token = tokenList[tokenIndex];
     if (
-      this.tokens.currentToken().scopeDepth === 0 &&
-      this.tokens.matches4(tt.name, tt.dot, tt.name, tt.parenL) &&
-      this.tokens.identifierName() === JEST_GLOBAL_NAME
+      token.scopeDepth === 0 &&
+      token.type === tt.name &&
+      tokenList[tokenIndex + 1].type === tt.dot &&
+      tokenList[tokenIndex + 2].type === tt.name &&
+      tokenList[tokenIndex + 3].type === tt.parenL &&
+      this.tokens.identifierNameForToken(token) === JEST_GLOBAL_NAME
     ) {
       return this.extractHoistedCalls();
     }
@@ -34,11 +40,20 @@ export default class JestHoistTransformer extends Transformer {
   }
 
   private extractHoistedCalls(): boolean {
+    const tokenList = this.tokens.tokens;
     this.tokens.removeToken();
     let followsNonHoistedJestCall = false;
 
-    while (this.tokens.matches3(tt.dot, tt.name, tt.parenL)) {
-      const methodName = this.tokens.identifierNameAtIndex(this.tokens.currentIndex() + 1);
+    while (true) {
+      const tokenIndex = this.tokens.currentIndex();
+      if (
+        tokenList[tokenIndex].type !== tt.dot ||
+        tokenList[tokenIndex + 1].type !== tt.name ||
+        tokenList[tokenIndex + 2].type !== tt.parenL
+      ) {
+        break;
+      }
+      const methodName = this.tokens.identifierNameForToken(tokenList[tokenIndex + 1]);
       if (isHoistedJestMethod(methodName)) {
         const hoistedFunctionName = this.nameManager.claimFreeName("__jestHoist");
         this.hoistedCode += `${hoistedFunctionName}();`;
