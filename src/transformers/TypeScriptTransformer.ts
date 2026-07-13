@@ -13,6 +13,12 @@ import {removeMaybeImportAttributes} from "../util/removeMaybeImportAttributes";
 import type RootTransformer from "./RootTransformer";
 import Transformer from "./Transformer";
 
+/** Local const for enum members; null when unused or would shadow the IIFE param. */
+function enumLocalBinding(enumName: string, variableName: string | null): string | null {
+  if (variableName == null || variableName === enumName) return null;
+  return variableName;
+}
+
 export default class TypeScriptTransformer extends Transformer {
   private declarationInfo: DeclarationInfo | null = null;
   private simpleEnumCode = "";
@@ -377,7 +383,9 @@ export default class TypeScriptTransformer extends Transformer {
         this.tokens.removeToken();
       }
 
-      if (keyInfo.variableName != null) {
+      // Prefer the local const name only when it was actually emitted (not
+      // suppressed for shadowing the enum IIFE parameter — QuickJS rejects that).
+      if (keyInfo.variableName != null && keyInfo.variableName !== enumName) {
         previousValueCode = keyInfo.variableName;
       } else {
         previousValueCode = `${enumName}[${keyInfo.nameStringCode}]`;
@@ -404,11 +412,13 @@ export default class TypeScriptTransformer extends Transformer {
     nameStringCode: string,
     variableName: string | null,
   ): void {
-    if (variableName != null) {
-      this.tokens.appendCode(`const ${variableName}`);
+    // Local const must not shadow the enum IIFE param (QuickJS rejects it).
+    const local = enumLocalBinding(enumName, variableName);
+    if (local != null) {
+      this.tokens.appendCode(`const ${local}`);
       this.tokens.copyToken();
       this.tokens.copyToken();
-      this.tokens.appendCode(`; ${enumName}[${nameStringCode}] = ${variableName};`);
+      this.tokens.appendCode(`; ${enumName}[${nameStringCode}] = ${local};`);
     } else {
       this.tokens.appendCode(`${enumName}[${nameStringCode}]`);
       this.tokens.copyToken();
@@ -427,14 +437,15 @@ export default class TypeScriptTransformer extends Transformer {
       throw new Error("Expected rhsEndIndex on enum assign.");
     }
 
-    if (variableName != null) {
-      this.tokens.appendCode(`const ${variableName}`);
+    const local = enumLocalBinding(enumName, variableName);
+    if (local != null) {
+      this.tokens.appendCode(`const ${local}`);
       this.tokens.copyToken();
       while (this.tokens.currentIndex() < rhsEndIndex) {
         this.rootTransformer.processToken();
       }
       this.tokens.appendCode(
-        `; ${enumName}[${enumName}[${nameStringCode}] = ${variableName}] = ${nameStringCode};`,
+        `; ${enumName}[${enumName}[${nameStringCode}] = ${local}] = ${nameStringCode};`,
       );
     } else {
       this.tokens.appendCode(`${enumName}[${enumName}[${nameStringCode}]`);
@@ -453,9 +464,10 @@ export default class TypeScriptTransformer extends Transformer {
     previousValueCode: string | null,
   ): void {
     let valueCode = previousValueCode != null ? `${previousValueCode} + 1` : "0";
-    if (variableName != null) {
-      this.tokens.appendCode(`const ${variableName} = ${valueCode}; `);
-      valueCode = variableName;
+    const local = enumLocalBinding(enumName, variableName);
+    if (local != null) {
+      this.tokens.appendCode(`const ${local} = ${valueCode}; `);
+      valueCode = local;
     }
     this.tokens.appendCode(
       `${enumName}[${enumName}[${nameStringCode}] = ${valueCode}] = ${nameStringCode};`,
