@@ -21,6 +21,7 @@ function enumLocalBinding(enumName: string, variableName: string | null): string
 
 export default class TypeScriptTransformer extends Transformer {
   private declarationInfo: DeclarationInfo | null = null;
+  private readonly emittedPlaceholders: Set<string> = new Set();
   private simpleEnumCode = "";
   private simpleEnumEndIndex = 0;
 
@@ -33,9 +34,39 @@ export default class TypeScriptTransformer extends Transformer {
     super();
   }
 
+  /**
+   * Decide whether a type-only export placeholder for `name` may be emitted,
+   * recording it as emitted when so.
+   *
+   * Two guards, both of which prevent generating code QuickJS rejects outright:
+   *
+   * 1. A real runtime value with this name wins. TS declaration merging lets
+   *    `export interface Foo {}` sit beside `export const Foo = 1;`, and the
+   *    value is the thing that must survive.
+   * 2. A name already stubbed must not be stubbed again. Declaration merging
+   *    also permits `export interface D {}` to appear twice in one file, but
+   *    two `export const D = undefined;` is a redeclaration SyntaxError that
+   *    fails the *entire module* at parse time — turning valid TypeScript that
+   *    Node accepts into a hard load error.
+   *
+   * Instances are per-file (RootTransformer builds a fresh
+   * TypeScriptTransformer per transform call), so this set does not leak
+   * across sources.
+   */
+  private shouldEmitPlaceholder(name: string): boolean {
+    if (hasDeclarationName(this.getDeclarationInfo().valueDeclarations, name)) {
+      return false;
+    }
+    if (this.emittedPlaceholders.has(name)) {
+      return false;
+    }
+    this.emittedPlaceholders.add(name);
+    return true;
+  }
+
   /** Only emit a placeholder if no runtime value with this name already exists. */
   private appendPlaceholder(name: string): void {
-    if (!hasDeclarationName(this.getDeclarationInfo().valueDeclarations, name)) {
+    if (this.shouldEmitPlaceholder(name)) {
       this.tokens.appendCode(`export const ${name} = undefined;`);
     }
   }
@@ -235,7 +266,7 @@ export default class TypeScriptTransformer extends Transformer {
         if (!isReExport &&
             !specifierInfo.isType &&
             specifierInfo.rightName &&
-            !hasDeclarationName(this.getDeclarationInfo().valueDeclarations, specifierInfo.rightName)) {
+            this.shouldEmitPlaceholder(specifierInfo.rightName)) {
           placeholderCode += `export const ${specifierInfo.rightName} = undefined;`;
         }
         while (this.tokens.currentIndex() < specifierInfo.endIndex) {
@@ -281,8 +312,18 @@ export default class TypeScriptTransformer extends Transformer {
         } else if (tokenType === tt.braceR || tokenType === tt.parenR ||
                    tokenType === tt.bracketR) {
           depth--;
+        } else if (depth === 0 && tokenType === tt.semi) {
+          // The `;` that terminates `export type Foo = <expr>;` is itself
+          // flagged isType by the tokenizer, so the `!token.isType` test below
+          // never fires on it: the loop removed the `;` and kept going, eating
+          // the FOLLOWING statement's tokens. That silently dropped the next
+          // type-only export's placeholder (`export type A = 1;` +
+          // `export interface B {}` emitted only A), and a dropped placeholder
+          // is an ESM link failure in any module that imports that name.
+          // Terminate on a depth-0 `;` regardless of isType.
+          this.tokens.removeToken();
+          break;
         } else if (depth === 0 && !token.isType) {
-          if (tokenType === tt.semi) this.tokens.removeToken();
           break;
         }
         this.tokens.removeToken();
