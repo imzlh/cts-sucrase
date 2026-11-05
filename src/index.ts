@@ -1,62 +1,16 @@
 import computeSourceMap, {type RawSourceMap} from "./computeSourceMap";
-import {HelperManager} from "./HelperManager";
-import identifyShadowedGlobals from "./identifyShadowedGlobals";
-import NameManager from "./NameManager";
+import {getSucraseContext, type TransformFeatureFlags} from "./context";
 import {validateOptions} from "./Options";
 import type {Options, SourceMapOptions, Transform} from "./Options";
-import {parse} from "./parser";
-import type {Scope} from "./parser/tokenizer/state";
-import TokenProcessor from "./TokenProcessor";
 import RootTransformer from "./transformers/RootTransformer";
 import formatTokens from "./util/formatTokens";
-import getTSImportedNames from "./util/getTSImportedNames";
 
-export interface TransformFeatureFlags {
-  isJSXEnabled: boolean;
-  isTypeScriptEnabled: boolean;
-  isFlowEnabled: boolean;
-}
-
-const CNO_TS_FLAGS: TransformFeatureFlags = {
-  isJSXEnabled: false,
-  isTypeScriptEnabled: true,
-  isFlowEnabled: false,
-};
-const CNO_JSX_FLAGS: TransformFeatureFlags = {
-  isJSXEnabled: true,
-  isTypeScriptEnabled: false,
-  isFlowEnabled: false,
-};
-const CNO_TSX_FLAGS: TransformFeatureFlags = {
-  isJSXEnabled: true,
-  isTypeScriptEnabled: true,
-  isFlowEnabled: false,
-};
-const CNO_JS_FLAGS: TransformFeatureFlags = {
-  isJSXEnabled: false,
-  isTypeScriptEnabled: false,
-  isFlowEnabled: false,
-};
-const CNO_TRANSFORMS: Array<Transform> = [];
-const CNO_OPTIONS: Options = {
-  transforms: CNO_TRANSFORMS,
-  disableESTransforms: true,
-  production: false,
-  jsxPragma: "React.createElement",
-  jsxFragmentPragma: "React.Fragment",
-  filePath: "",
-};
+export {transformCno, transformCnoCode} from "./cno";
+export type {SucraseContext, TransformFeatureFlags} from "./context";
 
 export interface TransformResult {
   code: string;
   sourceMap?: RawSourceMap;
-}
-
-export interface SucraseContext {
-  tokenProcessor: TokenProcessor;
-  scopes: Array<Scope>;
-  nameManager: NameManager;
-  helperManager: HelperManager;
 }
 
 export type {Options, SourceMapOptions, Transform};
@@ -72,58 +26,6 @@ export function transform(code: string, options: Options): TransformResult {
 
 export function transformTrusted(code: string, options: Options): TransformResult {
   return transformTrustedWithFlags(code, options, getTransformFeatureFlags(options.transforms));
-}
-
-export function transformCno(
-  code: string,
-  filePath: string,
-  isTypeScriptEnabled: boolean,
-  isJSXEnabled: boolean,
-  jsxPragma: string,
-  jsxFragmentPragma: string,
-): TransformResult {
-  return {code: transformCnoCode(
-    code,
-    filePath,
-    isTypeScriptEnabled,
-    isJSXEnabled,
-    jsxPragma,
-    jsxFragmentPragma,
-  )};
-}
-
-export function transformCnoCode(
-  code: string,
-  filePath: string,
-  isTypeScriptEnabled: boolean,
-  isJSXEnabled: boolean,
-  jsxPragma: string,
-  jsxFragmentPragma: string,
-  keepUnusedImports = false,
-): string {
-  const flags = getCnoFeatureFlags(isTypeScriptEnabled, isJSXEnabled);
-  const options = CNO_OPTIONS;
-  options.filePath = filePath;
-  options.jsxPragma = jsxPragma;
-  options.jsxFragmentPragma = jsxFragmentPragma;
-  options.keepUnusedImports = keepUnusedImports ? true : undefined;
-  options.preserveImportAttributes = true;
-  try {
-    const sucraseContext = getSucraseContext(
-      code,
-      options,
-      flags,
-    );
-    const transformer = new RootTransformer(
-      sucraseContext,
-      flags,
-      options,
-    );
-    return transformer.transform().code;
-  } catch (e: any) {
-    e.message = `Error transforming ${filePath}: ${e.message}`;
-    throw e;
-  }
 }
 
 function transformTrustedWithFlags(
@@ -165,37 +67,12 @@ function transformTrustedWithFlags(
 }
 
 export function getFormattedTokens(code: string, options: Options): string {
-  const tokens = getSucraseContext(code, options).tokenProcessor.tokens;
-  return formatTokens(code, tokens);
-}
-
-function getSucraseContext(
-  code: string,
-  options: Options,
-  flags: TransformFeatureFlags = getTransformFeatureFlags(options.transforms),
-): SucraseContext {
-  const {isJSXEnabled, isTypeScriptEnabled, isFlowEnabled} = flags;
-  const file = parse(code, isJSXEnabled, isTypeScriptEnabled, isFlowEnabled);
-  const tokens = file.tokens;
-  const scopes = file.scopes;
-
-  const nameManager = new NameManager(code, tokens);
-  const helperManager = new HelperManager(nameManager);
-  const tokenProcessor = new TokenProcessor(
+  const tokens = getSucraseContext(
     code,
-    tokens,
-    isFlowEnabled,
-    helperManager,
-    Boolean(options.sourceMapOptions),
-  );
-
-  if (isTypeScriptEnabled && !options.keepUnusedImports && code.indexOf("import") !== -1) {
-    const tsImportedNames = getTSImportedNames(tokenProcessor);
-    if (tsImportedNames.length > 0) {
-      identifyShadowedGlobals(tokenProcessor, scopes, tsImportedNames);
-    }
-  }
-  return {tokenProcessor, scopes, nameManager, helperManager};
+    options,
+    getTransformFeatureFlags(options.transforms),
+  ).tokenProcessor.tokens;
+  return formatTokens(code, tokens);
 }
 
 function getTransformFeatureFlags(transforms: Array<Transform>): TransformFeatureFlags {
@@ -217,13 +94,4 @@ function getTransformFeatureFlags(transforms: Array<Transform>): TransformFeatur
     }
   }
   return {isJSXEnabled, isTypeScriptEnabled, isFlowEnabled};
-}
-
-function getCnoFeatureFlags(
-  isTypeScriptEnabled: boolean,
-  isJSXEnabled: boolean,
-): TransformFeatureFlags {
-  return isTypeScriptEnabled
-    ? isJSXEnabled ? CNO_TSX_FLAGS : CNO_TS_FLAGS
-    : isJSXEnabled ? CNO_JSX_FLAGS : CNO_JS_FLAGS;
 }
